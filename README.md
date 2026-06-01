@@ -10,10 +10,72 @@ schemes, arc42 map, wikilink rules, operation semantics) lives in a
 `docs/architecture/CLAUDE.md` file **inside the consuming repository**; every
 command and agent in this plugin reads and obeys that schema at runtime.
 
+## Installation
+
+Two ways to install, depending on whether you're *using* the plugin or
+*developing* it.
+
+### A · Pinned release from the marketplace — for use in any project
+
+Install from the [`ypolosov-marketplace`](https://github.com/ypolosov/ypolosov-marketplace)
+catalog. Add the marketplace once, then install:
+
+```text
+/plugin marketplace add ypolosov/ypolosov-marketplace
+/plugin install arch-wiki@ypolosov-marketplace
+```
+
+or from the CLI:
+
+```bash
+claude plugin marketplace add ypolosov/ypolosov-marketplace
+claude plugin install arch-wiki@ypolosov-marketplace
+```
+
+**About the version.** Claude Code has **no install-time `@version` flag** — you
+cannot write `arch-wiki@ypolosov-marketplace@0.1.0`. The installed version is the
+one *pinned by the marketplace entry*: its `version` field (currently `0.1.0`)
+plus the git `ref` of the source repo. You always get exactly that pinned
+release; a new version reaches you only when the marketplace bumps it, and you
+pull it explicitly:
+
+```bash
+claude plugin update arch-wiki@ypolosov-marketplace
+```
+
+This is the path for normal day-to-day use across your projects: a stable,
+reproducible version, installed once at the `user` scope (or `--scope project`
+to scope it to one repo).
+
+### B · From a local folder — for development with a fast feedback loop
+
+While editing the plugin, load it straight from its source folder — no install,
+no marketplace — so every change is one reload away:
+
+```bash
+claude --plugin-dir /path/to/arch-wiki   # load for this session (not installed)
+```
+
+Then, after editing any command/agent/skill, pick up the changes without
+restarting:
+
+```text
+/reload-plugins
+```
+
+Validate the plugin structure before committing or releasing:
+
+```bash
+claude plugin validate /path/to/arch-wiki --strict
+```
+
+This is the path for development and quick iteration: edit → `/reload-plugins`
+→ try a command, repeated.
+
 ## Setup in your project
 
-This plugin operates on a `docs/architecture/` wiki in the repo where you run
-it. To bootstrap it:
+Regardless of how you installed it, this plugin operates on a
+`docs/architecture/` wiki in the repo where you run it. To bootstrap it:
 
 1. Copy the schema template [`schema/CLAUDE.md`](schema/CLAUDE.md) to
    `docs/architecture/CLAUDE.md` in your repo.
@@ -46,14 +108,6 @@ stay as-is.
 
 `arc42-map`, `add-method`, `madr-format`, `likec4-dsl` — the methodology
 knowledge Claude pulls in automatically when working on the wiki.
-
-## Local development
-
-```bash
-claude --plugin-dir ./.claude/plugins/arch-wiki   # load without installing
-/reload-plugins                                    # pick up edits
-claude plugin validate ./.claude/plugins/arch-wiki # validate structure
-```
 
 ## License
 
