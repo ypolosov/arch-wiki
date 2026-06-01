@@ -1,5 +1,5 @@
 ---
-description: arc42 12-section template and how each section maps to artifacts in the GromTech docs/architecture wiki. Use when placing, cross-referencing, or generating architecture content so it lands in the right arc42 section and folder.
+description: arc42 12-section template and how each section maps to artifacts in the docs/architecture wiki. Use when placing, cross-referencing, or generating architecture content so it lands in the right arc42 section and folder.
 ---
 
 # arc42 section map

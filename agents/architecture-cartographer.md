@@ -13,9 +13,9 @@ sources under `docs/architecture/c4/src/` and the wikilink sections of wiki page
 — never the `.likec4/*.snap` snapshots, never `raw/`.
 
 ## Tasks
-1. Inventory C4 elements/views from `c4/src/*.c4` (systems under `product`,
-   subsystems, deployment nodes, views `context/containers/platform/operator/
-   gaming/deploymentProd`).
+1. Inventory C4 elements/views from `c4/src/*.c4` (the top-level system, its
+   subsystems, deployment nodes, and all declared views) — discover the names
+   from the sources; they are project-specific.
 2. For each ADR that introduces or changes a component, ensure:
    - the component exists in the C4 model (propose the `*.c4` edit if missing),
    - the ADR's **More Information** links the realized C4 element / arc42 view hub.
