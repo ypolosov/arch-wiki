@@ -54,3 +54,7 @@ claude --plugin-dir ./.claude/plugins/arch-wiki   # load without installing
 /reload-plugins                                    # pick up edits
 claude plugin validate ./.claude/plugins/arch-wiki # validate structure
 ```
+
+## License
+
+[MIT](LICENSE)
