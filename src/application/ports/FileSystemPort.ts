@@ -6,4 +6,6 @@ export interface FileSystemPort {
   writeFile(absPath: string, content: string): Promise<void>;
   /** Directory entry names, or [] if the directory is missing. */
   list(absDir: string): Promise<string[]>;
+  /** Absolute paths of all files under absDir (recursive), or [] if missing. */
+  walk(absDir: string): Promise<string[]>;
 }

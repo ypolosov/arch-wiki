@@ -54,6 +54,29 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(env.data.id).toBe('QA-002');
   });
 
+  it('lint exits 2 and reports a broken md-link', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, 'adrs'), { recursive: true });
+    await fs.writeFile(path.join(wiki, 'index.md'), '# Index\n[ghost](adrs/0099-ghost.md)\n');
+
+    let exitCode = 0;
+    let stdout = '';
+    try {
+      stdout = execFileSync('node', [CLI, 'lint', '--json', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+    } catch (e: unknown) {
+      const err = e as { status: number; stdout: string };
+      exitCode = err.status;
+      stdout = err.stdout;
+    }
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout.trim().split('\n').pop()!) as Envelope;
+    const findings = env.data.findings as Array<{ rule: string }>;
+    expect(findings.some((f) => f.rule === 'broken-mdlink')).toBe(true);
+  });
+
   it('fails with a JSON error and non-zero exit on unknown type', () => {
     let exitCode = 0;
     let stderr = '';

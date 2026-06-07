@@ -1,14 +1,69 @@
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { cac } from 'cac';
 import { NodeFileSystem } from '../adapters/fs/NodeFileSystem';
 import { SystemClock } from '../adapters/clock/SystemClock';
 import { PluginTemplateStore } from '../adapters/template/PluginTemplateStore';
 import { FoamWikiRepository } from '../adapters/repo/FoamWikiRepository';
+import { FileVersionStore } from '../adapters/version/FileVersionStore';
 import { allocateNextId } from '../application/usecases/AllocateNextId';
 import { scaffoldArtifact } from '../application/usecases/ScaffoldArtifact';
+import { lintWiki } from '../application/usecases/LintWiki';
+import { applyMigration } from '../application/usecases/Migrate';
+import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
+import { MigrationContext } from '../migrations/types';
 import { resolveKind } from '../domain/model/ArtifactType';
+import { kindOfPage } from '../domain/model/WikiPage';
+import { Severity } from '../domain/services/LintRuleSet';
+import { isProtectedWritePath } from '../domain/services/PathUtil';
 import { DomainError } from '../domain/errors';
 import { PLUGIN_VERSION } from './version';
+
+const WIKI_MARKER = 'docs/architecture/';
+
+function readStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) {
+      resolve('');
+      return;
+    }
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => (data += c));
+    process.stdin.on('end', () => resolve(data));
+  });
+}
+
+function hookFilePath(stdinJson: string): string {
+  try {
+    return (JSON.parse(stdinJson)?.tool_input?.file_path as string) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function migrationContext(opts: GlobalOpts): MigrationContext {
+  const root = wikiRoot(opts);
+  const fs = new NodeFileSystem();
+  const repo = new FoamWikiRepository(root, fs);
+  const clock = new SystemClock();
+  return {
+    abs: (relPath: string) => path.join(root, relPath),
+    fs,
+    lint: async () => (await lintWiki(repo)).findings,
+    hash: (content: string) => createHash('sha256').update(content).digest('hex'),
+    now: () => clock.now(),
+  };
+}
+
+function csv(value: unknown): string[] {
+  return value
+    ? String(value)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+}
 
 interface GlobalOpts {
   cwd?: string;
@@ -96,6 +151,44 @@ async function main(): Promise<void> {
       }
     });
 
+  cli
+    .command('guard-path', 'PreToolUse hook: block writes to raw/ and .likec4 snapshots')
+    .option('--stdin', 'read the hook payload from stdin')
+    .action(async () => {
+      try {
+        const fp = hookFilePath(await readStdin());
+        if (fp && isProtectedWritePath(fp)) {
+          process.stderr.write(`arch-wiki: blocked write to immutable path: ${fp}\n`);
+          process.exit(2);
+        }
+      } catch {
+        // never hard-fail an edit because the guard misbehaved
+      }
+      process.exit(0);
+    });
+
+  cli
+    .command('hook-lint-changed', 'PostToolUse hook: lint the changed wiki file (high only)')
+    .option('--stdin', 'read the hook payload from stdin')
+    .action(async () => {
+      try {
+        const fp = hookFilePath(await readStdin()).split('\\').join('/');
+        const idx = fp.indexOf(WIKI_MARKER);
+        if (idx < 0 || !fp.endsWith('.md')) process.exit(0);
+        const root = fp.slice(0, idx + WIKI_MARKER.length - 1); // .../docs/architecture
+        const rel = fp.slice(idx + WIKI_MARKER.length);
+        const repo = new FoamWikiRepository(root, new NodeFileSystem());
+        const report = await lintWiki(repo, { changed: [rel], severity: 'high' });
+        if (report.findings.length > 0) {
+          process.stdout.write(`${JSON.stringify({ ok: false, command: 'hook-lint-changed', data: report })}\n`);
+          process.exit(2);
+        }
+      } catch {
+        // non-blocking: a hook failure must not wedge editing
+      }
+      process.exit(0);
+    });
+
   cli.command('doctor', 'environment preflight').action(async () => {
     try {
       const fs = new NodeFileSystem();
@@ -116,9 +209,119 @@ async function main(): Promise<void> {
     }
   });
 
-  cli.command('version', 'print plugin and node versions').action(() => {
-    emit({ ok: true, command: 'version', data: { plugin: PLUGIN_VERSION, node: process.version } });
-  });
+  cli
+    .command('lint', 'audit graph integrity with deterministic rules')
+    .option('--json', 'emit JSON (always on; accepted for compatibility)')
+    .option('--changed <files>', 'comma-separated wiki-relative paths to scope to')
+    .option('--severity <level>', 'minimum severity: low|medium|high')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const report = await lintWiki(repo, {
+          changed: opts.changed ? csv(opts.changed) : undefined,
+          severity: opts.severity as Severity | undefined,
+        });
+        emit({ ok: report.findings.length === 0, command: 'lint', data: report });
+        if (report.findings.length > 0) process.exit(2);
+      } catch (err) {
+        fail('lint', err);
+      }
+    });
+
+  cli
+    .command('validate-graph', 'check links, orphans, coverage (broken links block)')
+    .action(async (opts: GlobalOpts) => {
+      try {
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const report = await lintWiki(repo, {});
+        const broken = report.findings.filter((f) => f.rule.startsWith('broken'));
+        emit({
+          ok: broken.length === 0,
+          command: 'validate-graph',
+          data: { findings: report.findings, counts: report.counts, brokenCount: broken.length },
+        });
+        if (broken.length > 0) process.exit(2);
+      } catch (err) {
+        fail('validate-graph', err);
+      }
+    });
+
+  cli
+    .command('list <type>', 'list existing artifacts of a type')
+    .action(async (type: string, opts: GlobalOpts) => {
+      try {
+        const spec = resolveKind(type);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const pages = await repo.loadPages();
+        const items = pages
+          .filter((p) => kindOfPage(p) === spec.kind)
+          .map((p) => ({ basename: p.basename, path: p.relPath }))
+          .sort((a, b) => a.basename.localeCompare(b.basename));
+        emit({ ok: true, command: 'list', data: { kind: spec.kind, items } });
+      } catch (err) {
+        fail('list', err);
+      }
+    });
+
+  cli
+    .command('migrate', 'apply schema migrations sequentially to the target wiki')
+    .option('--to <n>', 'target schema version (default: current)')
+    .option('--status', 'report current/target/pending without applying')
+    .option('--dry-run', 'plan without writing')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const store = new FileVersionStore(wikiRoot(opts), new NodeFileSystem());
+        const to = opts.to != null ? Number(opts.to) : undefined;
+        const result = await applyMigration(store, migrationContext(opts), {
+          to,
+          dryRun: !!opts.dryRun || !!opts.status,
+          pluginVersion: PLUGIN_VERSION,
+        });
+        emit({ ok: true, command: 'migrate', data: result });
+      } catch (err) {
+        fail('migrate', err);
+      }
+    });
+
+  cli
+    .command('adopt', 'onboard an existing (populated) wiki onto the contract — first-time')
+    .option('--dry-run', 'plan without writing')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const store = new FileVersionStore(wikiRoot(opts), new NodeFileSystem());
+        const existing = await store.read();
+        if (existing && !opts.dryRun) {
+          throw new DomainError(
+            `already adopted (schema v${existing.schemaVersion}); use 'migrate' instead`,
+            1,
+          );
+        }
+        const result = await applyMigration(store, migrationContext(opts), {
+          dryRun: !!opts.dryRun,
+          pluginVersion: PLUGIN_VERSION,
+        });
+        emit({ ok: true, command: 'adopt', data: result });
+      } catch (err) {
+        fail('adopt', err);
+      }
+    });
+
+  cli
+    .command('version', 'print plugin/schema versions')
+    .option('--target', 'include the target wiki schema version')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      const data: Record<string, unknown> = {
+        plugin: PLUGIN_VERSION,
+        schema: CURRENT_SCHEMA_VERSION,
+        node: process.version,
+      };
+      if (opts.target) {
+        const marker = await new FileVersionStore(wikiRoot(opts), new NodeFileSystem()).read();
+        data.targetSchema = marker?.schemaVersion ?? null;
+        data.migrationNeeded = (marker?.schemaVersion ?? 0) < CURRENT_SCHEMA_VERSION;
+      }
+      emit({ ok: true, command: 'version', data });
+    });
 
   cli.help();
   cli.parse(process.argv, { run: false });

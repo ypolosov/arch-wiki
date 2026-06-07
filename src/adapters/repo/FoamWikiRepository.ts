@@ -1,8 +1,14 @@
 import * as path from 'node:path';
+import matter from 'gray-matter';
 import { FileSystemPort } from '../../application/ports/FileSystemPort';
 import { WikiRepositoryPort } from '../../application/ports/WikiRepositoryPort';
 import { ArtifactId } from '../../domain/model/ArtifactId';
 import { ARTIFACT_SPECS, ArtifactSpec, ArtifactKind } from '../../domain/model/ArtifactType';
+import { WikiPage } from '../../domain/model/WikiPage';
+import { scanLinks } from '../../domain/services/WikilinkScanner';
+
+// Top-level folders never treated as Layer-2 wiki pages.
+const EXCLUDED_TOP = new Set(['raw', 'c4', '.foam', '.arch-wiki', 'out', 'node_modules', '.git']);
 
 // Prefix → spec, for resolving an id back to its folder/file.
 const PREFIX_TO_SPEC: Record<string, ArtifactSpec> = {};
@@ -20,6 +26,48 @@ export class FoamWikiRepository implements WikiRepositoryPort {
 
   private abs(relPath: string): string {
     return path.join(this.root, relPath);
+  }
+
+  async readLintBaseline(): Promise<string[]> {
+    const f = this.abs('.arch-wiki/lint-baseline.json');
+    if (!(await this.fs.exists(f))) return [];
+    try {
+      const parsed = JSON.parse(await this.fs.readFile(f));
+      return Array.isArray(parsed) ? (parsed as string[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async listFiles(): Promise<string[]> {
+    const files = await this.fs.walk(this.root);
+    return files
+      .map((abs) => path.relative(this.root, abs).split(path.sep).join('/'))
+      .filter((rel) => !rel.startsWith('.git/') && !rel.startsWith('node_modules/'));
+  }
+
+  async loadPages(): Promise<WikiPage[]> {
+    const files = await this.fs.walk(this.root);
+    const pages: WikiPage[] = [];
+    for (const absFile of files) {
+      if (!absFile.endsWith('.md')) continue;
+      const rel = path.relative(this.root, absFile).split(path.sep).join('/');
+      const top = rel.split('/')[0]!;
+      if (EXCLUDED_TOP.has(top)) continue;
+      const raw = await this.fs.readFile(absFile);
+      const parsed = matter(raw);
+      const { links, mdLinks } = scanLinks(parsed.content);
+      const dir = path.posix.dirname(rel);
+      pages.push({
+        relPath: rel,
+        basename: path.basename(rel, '.md'),
+        folder: dir === '.' ? '' : dir,
+        frontmatter: (parsed.data ?? {}) as Record<string, unknown>,
+        links,
+        mdLinks,
+      });
+    }
+    return pages;
   }
 
   private numberFromFilename(spec: ArtifactSpec, filename: string): number | null {

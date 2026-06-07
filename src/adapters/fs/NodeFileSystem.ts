@@ -29,4 +29,21 @@ export class NodeFileSystem implements FileSystemPort {
       throw err;
     }
   }
+
+  async walk(absDir: string): Promise<string[]> {
+    let entries;
+    try {
+      entries = await fs.readdir(absDir, { withFileTypes: true });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    const out: string[] = [];
+    for (const e of entries) {
+      const full = path.join(absDir, e.name);
+      if (e.isDirectory()) out.push(...(await this.walk(full)));
+      else if (e.isFile()) out.push(full);
+    }
+    return out;
+  }
 }
