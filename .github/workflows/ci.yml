@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit + integration tests
+        run: npx jest --selectProjects unit integration
+      - name: Build bundle
+        run: npm run build
+      - name: E2E tests (built bundle)
+        run: npx jest --selectProjects e2e
+
+  bundle-fresh:
+    name: committed dist/ is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # The runtime bundle is committed; a stale dist/ must fail CI.
+      - name: Fail if dist/cli.cjs differs from a fresh build
+        run: git diff --exit-code -- dist/cli.cjs
+
+  plugin-manifest:
+    name: plugin manifest + bundle present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Manifest is valid and the runtime bundle is committed
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(".claude-plugin/plugin.json", "utf8"));
+            if (!m.name) { console.error("plugin.json missing required field: name"); process.exit(1); }
+            if (!fs.existsSync("dist/cli.cjs")) { console.error("dist/cli.cjs (runtime bundle) is not committed"); process.exit(1); }
+            if (!fs.existsSync("bin/arch-wiki")) { console.error("bin/arch-wiki shim missing"); process.exit(1); }
+            console.log(`ok: ${m.name}@${m.version ?? "unversioned"}`);
+          '

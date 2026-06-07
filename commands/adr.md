@@ -1,19 +1,17 @@
 ---
 description: Scaffold the next-numbered MADR Architecture Decision Record with drivers wired as wikilinks.
 argument-hint: <short decision title> [--drivers QA-003,CON-006,...]
+allowed-tools: Bash(arch-wiki:*)
 ---
 
 Create a new ADR. Title/args: `$ARGUMENTS`
 
-1. Follow the `madr-format` skill and the schema in `docs/architecture/CLAUDE.md`.
-2. Compute the next number: list `docs/architecture/adrs/`, take the highest
-   `NNNN`, add 1, zero-pad to 4 digits.
-3. Create `docs/architecture/adrs/NNNN-<kebab-title>.md` from
-   `docs/architecture/.foam/templates/adr.md`, with:
-   - heading `# ADR-NNNN: <Title>`, `Status: proposed`, today's date,
-   - any `--drivers` resolved to wikilinks (e.g. `[[CON-006-sla-targets|CON-006]]`),
-     validating that each referenced driver file exists,
-   - placeholder sections for Context, Options, Outcome, Consequences.
-4. Add a wikilink to the new ADR from `arc42/09-architecture-decisions.md`.
-5. Report the path and remind the curator to fill Context/Options/Outcome and run
-   `/arch-wiki:lint` before promoting `Status` to `accepted`.
+The deterministic `arch-wiki` CLI owns the id, filename, template, driver
+wikilinks, and arc42 hub backlink — never compute these by hand.
+
+1. Parse `$ARGUMENTS`: an optional `--drivers a,b,c` flag and the remaining text as the title.
+2. Run the scaffolder (pre-approved): `arch-wiki scaffold adr --title "<title>" [--drivers <ids>]`
+3. From the JSON result, report `data.path` and any `data.unresolvedDrivers` (placeholder links to revisit).
+4. Following the `madr-format` skill, help the curator draft the **Context**,
+   **Considered Options**, and **Decision Outcome** prose only. Remind them to run
+   `/arch-wiki:lint` before promoting the status to `accepted`.
