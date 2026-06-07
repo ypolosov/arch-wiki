@@ -9,6 +9,8 @@ import { FileVersionStore } from '../adapters/version/FileVersionStore';
 import { allocateNextId } from '../application/usecases/AllocateNextId';
 import { scaffoldArtifact } from '../application/usecases/ScaffoldArtifact';
 import { lintWiki } from '../application/usecases/LintWiki';
+import { recordRisk } from '../application/usecases/RecordRisk';
+import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
 import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
 import { MigrationContext } from '../migrations/types';
@@ -63,6 +65,10 @@ function csv(value: unknown): string[] {
         .map((s) => s.trim())
         .filter(Boolean)
     : [];
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 interface GlobalOpts {
@@ -260,6 +266,60 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'list', data: { kind: spec.kind, items } });
       } catch (err) {
         fail('list', err);
+      }
+    });
+
+  cli
+    .command('record-risk', 'idempotently record a risk/contradiction row in risks.md')
+    .option('--source <name>', 'where it was detected (e.g. ingest, lint)')
+    .option('--id <id>', 'related artifact id (e.g. QA-007)')
+    .option('--conflict <text>', 'one-line description of the risk/contradiction')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.source) throw new DomainError('missing --source', 1);
+        if (!opts.conflict) throw new DomainError('missing --conflict', 1);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const date = new SystemClock().now().toISOString().slice(0, 10);
+        const result = await recordRisk(
+          {
+            source: String(opts.source),
+            id: opts.id != null ? String(opts.id) : undefined,
+            conflict: String(opts.conflict),
+            date,
+          },
+          { repo, hash: sha256 },
+        );
+        emit({ ok: true, command: 'record-risk', data: result });
+      } catch (err) {
+        fail('record-risk', err);
+      }
+    });
+
+  cli
+    .command('sync-templates', 'sync plugin templates into target .foam/templates (non-destructive)')
+    .option('--check', 'report drift only (default; exits 2 on missing/stale)')
+    .option('--force', 'create missing and update stale templates (curated files preserved)')
+    .option('--dry-run', 'preview without writing or failing')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const fs = new NodeFileSystem();
+        const repo = new FoamWikiRepository(wikiRoot(opts), fs);
+        const templates = new PluginTemplateStore(templatesDir(), fs);
+        const write = !!opts.force;
+        const result = await syncTemplates({ write }, { templates, repo, hash: sha256 });
+        const warnings =
+          result.counts.curated > 0
+            ? [`${result.counts.curated} curated template(s) preserved (not arch-wiki-managed)`]
+            : undefined;
+        emit({
+          ok: write || result.actionable === 0,
+          command: 'sync-templates',
+          data: result,
+          warnings,
+        });
+        if (!write && !opts.dryRun && result.actionable > 0) process.exit(2);
+      } catch (err) {
+        fail('sync-templates', err);
       }
     });
 

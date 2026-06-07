@@ -63,6 +63,10 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
 
 - Next ADR number = highest existing `NNNN` in `adrs/` + 1, zero-padded to 4.
 - Use the Foam templates in `.foam/templates/` as the canonical page skeletons.
+  These are synced **one-way** from the plugin via `arch-wiki sync-templates`
+  (default reports drift; `--force` writes). Templates you author yourself
+  (no `arch-wiki:template` marker) are **never overwritten** — to replace one,
+  delete it first, then re-sync.
 - New Layer-2 pages MUST carry frontmatter `type:` (drives graph coloring) and
   relevant `tags:`.
 
@@ -85,8 +89,9 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
 2. Extract candidate drivers (UC/QA/CON/CONC) and decisions.
 3. Create/update Layer-2 pages from templates; place by the ID scheme above.
 4. Wire `[[wikilinks]]` to every entity/decision/driver mentioned.
-5. **Flag contradictions** with existing pages as a new row in `risks.md`
-   (type `Risk` or `Contradiction`) and a note on the affected page — do not
+5. **Flag contradictions** with existing pages via
+   `arch-wiki record-risk --source ingest --id <ID> --conflict "<one-liner>"`
+   (idempotent row in `risks.md`) plus a note on the affected page — do not
    silently overwrite recorded decisions.
 6. Each page touched gets/refreshes a **Sources** section pointing back to the raw file.
 

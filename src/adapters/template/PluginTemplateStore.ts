@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { TemplatePort } from '../../application/ports/TemplatePort';
+import { TemplateFile, TemplatePort } from '../../application/ports/TemplatePort';
 import { FileSystemPort } from '../../application/ports/FileSystemPort';
 import { ArtifactSpec } from '../../domain/model/ArtifactType';
 import { DomainError } from '../../domain/errors';
@@ -17,5 +17,14 @@ export class PluginTemplateStore implements TemplatePort {
       throw new DomainError(`template not found: ${spec.template} (looked in ${this.dir})`, 3);
     }
     return this.fs.readFile(p);
+  }
+
+  async listAll(): Promise<TemplateFile[]> {
+    const names = (await this.fs.list(this.dir)).filter((n) => n.endsWith('.md')).sort();
+    const out: TemplateFile[] = [];
+    for (const name of names) {
+      out.push({ name, body: await this.fs.readFile(path.join(this.dir, name)) });
+    }
+    return out;
   }
 }

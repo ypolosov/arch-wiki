@@ -4176,6 +4176,14 @@ var PluginTemplateStore = class {
     }
     return this.fs.readFile(p);
   }
+  async listAll() {
+    const names = (await this.fs.list(this.dir)).filter((n) => n.endsWith(".md")).sort();
+    const out = [];
+    for (const name of names) {
+      out.push({ name, body: await this.fs.readFile(path2.join(this.dir, name)) });
+    }
+    return out;
+  }
 };
 
 // src/adapters/repo/FoamWikiRepository.ts
@@ -4814,6 +4822,88 @@ async function lintWiki(repo, opts = {}) {
   return { findings, counts };
 }
 
+// src/application/usecases/RecordRisk.ts
+var RISK_FILE = "risks.md";
+var HEADER_MARK = "| Key |";
+var TABLE_HEADER = "| Key | Date | Source | Related | Description | Status |\n| --- | --- | --- | --- | --- | --- |\n";
+var SCAFFOLD = "---\ntype: risk-register\ntags: [risks]\n---\n\n# Risks & Contradictions\n\nMaintained by `arch-wiki record-risk` \u2014 one row per detected risk or\ncontradiction, keyed by a content hash so re-recording is idempotent.\n\n" + TABLE_HEADER;
+function cell(value) {
+  return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+}
+async function recordRisk(input, deps) {
+  const { repo, hash } = deps;
+  const source = input.source.trim();
+  const conflict = input.conflict.trim();
+  if (!source) throw new DomainError("record-risk: missing source", 1);
+  if (!conflict) throw new DomainError("record-risk: missing conflict", 1);
+  const id = (input.id ?? "").trim();
+  const key = hash(`${source}\0${id}\0${conflict}`).slice(0, 12);
+  const row = `| ${key} | ${input.date} | ${cell(source)} | ${cell(id) || "\u2014"} | ${cell(conflict)} | open |`;
+  const exists = await repo.exists(RISK_FILE);
+  if (!exists) {
+    await repo.write(RISK_FILE, `${SCAFFOLD}${row}
+`);
+    return { key, created: true, path: RISK_FILE };
+  }
+  const cur = await repo.read(RISK_FILE);
+  if (cur.includes(`| ${key} |`)) {
+    return { key, created: false, path: RISK_FILE };
+  }
+  const base = cur.length === 0 || cur.endsWith("\n") ? cur : `${cur}
+`;
+  const next = cur.includes(HEADER_MARK) ? `${base}${row}
+` : `${base}
+${TABLE_HEADER}${row}
+`;
+  await repo.write(RISK_FILE, next);
+  return { key, created: true, path: RISK_FILE };
+}
+
+// src/application/usecases/SyncTemplates.ts
+var FOAM_DIR = ".foam/templates";
+var MARKER_RE = /<!-- arch-wiki:template sha256=([0-9a-f]+) -->/;
+function managed(body, bodyHash) {
+  return `${body.replace(/\s+$/, "")}
+
+<!-- arch-wiki:template sha256=${bodyHash} -->
+`;
+}
+async function syncTemplates(input, deps) {
+  const { templates, repo, hash } = deps;
+  const entries = [];
+  const wrote = [];
+  for (const { name, body } of await templates.listAll()) {
+    const bodyHash = hash(body);
+    const rel = `${FOAM_DIR}/${name}`;
+    let status;
+    let cur = "";
+    if (!await repo.exists(rel)) {
+      status = "missing";
+    } else {
+      cur = await repo.read(rel);
+      const m = MARKER_RE.exec(cur);
+      if (m && m[1] === bodyHash) status = "synced";
+      else if (m) status = "stale";
+      else status = "curated";
+    }
+    const entry = { name, status, wrote: false };
+    if (input.write && (status === "missing" || status === "stale")) {
+      if (status === "stale") {
+        const bak = `${rel}.bak`;
+        await repo.write(bak, cur);
+        entry.backedUp = bak;
+      }
+      await repo.write(rel, managed(body, bodyHash));
+      entry.wrote = true;
+      wrote.push(rel);
+    }
+    entries.push(entry);
+  }
+  const counts = { synced: 0, missing: 0, stale: 0, curated: 0 };
+  for (const e of entries) counts[e.status]++;
+  return { entries, counts, actionable: counts.missing + counts.stale, wrote };
+}
+
 // src/migrations/0001-introduce-version-marker/up.ts
 var TEMPLATES_DIR = ".foam/templates";
 var migration0001 = {
@@ -4886,7 +4976,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.2.0";
+var PLUGIN_VERSION = "0.2.2";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -4924,6 +5014,9 @@ function migrationContext(opts) {
 }
 function csv(value) {
   return value ? String(value).split(",").map((s) => s.trim()).filter(Boolean) : [];
+}
+function sha256(content) {
+  return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
 }
 function pluginRoot() {
   return process.env.ARCH_WIKI_PLUGIN_ROOT ?? path5.resolve(__dirname, "..");
@@ -5064,6 +5157,45 @@ async function main() {
       emit({ ok: true, command: "list", data: { kind: spec.kind, items } });
     } catch (err) {
       fail("list", err);
+    }
+  });
+  cli.command("record-risk", "idempotently record a risk/contradiction row in risks.md").option("--source <name>", "where it was detected (e.g. ingest, lint)").option("--id <id>", "related artifact id (e.g. QA-007)").option("--conflict <text>", "one-line description of the risk/contradiction").action(async (opts) => {
+    try {
+      if (!opts.source) throw new DomainError("missing --source", 1);
+      if (!opts.conflict) throw new DomainError("missing --conflict", 1);
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const date = new SystemClock().now().toISOString().slice(0, 10);
+      const result = await recordRisk(
+        {
+          source: String(opts.source),
+          id: opts.id != null ? String(opts.id) : void 0,
+          conflict: String(opts.conflict),
+          date
+        },
+        { repo, hash: sha256 }
+      );
+      emit({ ok: true, command: "record-risk", data: result });
+    } catch (err) {
+      fail("record-risk", err);
+    }
+  });
+  cli.command("sync-templates", "sync plugin templates into target .foam/templates (non-destructive)").option("--check", "report drift only (default; exits 2 on missing/stale)").option("--force", "create missing and update stale templates (curated files preserved)").option("--dry-run", "preview without writing or failing").action(async (opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const repo = new FoamWikiRepository(wikiRoot(opts), fs2);
+      const templates = new PluginTemplateStore(templatesDir(), fs2);
+      const write = !!opts.force;
+      const result = await syncTemplates({ write }, { templates, repo, hash: sha256 });
+      const warnings = result.counts.curated > 0 ? [`${result.counts.curated} curated template(s) preserved (not arch-wiki-managed)`] : void 0;
+      emit({
+        ok: write || result.actionable === 0,
+        command: "sync-templates",
+        data: result,
+        warnings
+      });
+      if (!write && !opts.dryRun && result.actionable > 0) process.exit(2);
+    } catch (err) {
+      fail("sync-templates", err);
     }
   });
   cli.command("migrate", "apply schema migrations sequentially to the target wiki").option("--to <n>", "target schema version (default: current)").option("--status", "report current/target/pending without applying").option("--dry-run", "plan without writing").action(async (opts) => {

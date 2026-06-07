@@ -2,7 +2,7 @@
   "name": "arch-wiki",
   "displayName": "Architecture Wiki",
   "description": "Deterministic-tool-first Solution Architecture wiki for docs/architecture: a TS/CLI core (ids, scaffold, lint) with an LLM orchestrator over an arc42 + ADD 3.0 + ADR (MADR) + C4/LikeC4 knowledge graph (Foam).",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "author": {
     "name": "ypolosov"
   },

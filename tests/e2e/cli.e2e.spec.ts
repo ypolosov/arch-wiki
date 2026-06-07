@@ -77,6 +77,43 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(findings.some((f) => f.rule === 'broken-mdlink')).toBe(true);
   });
 
+  it('sync-templates: check exits 2 when foam templates are missing; --force creates them', async () => {
+    let exitCode = 0;
+    try {
+      execFileSync('node', [CLI, 'sync-templates', '--cwd', root], { cwd: root, encoding: 'utf8' });
+    } catch (e: unknown) {
+      exitCode = (e as { status: number }).status;
+    }
+    expect(exitCode).toBe(2);
+
+    const env = run(['sync-templates', '--force', '--cwd', root], root);
+    expect(env.ok).toBe(true);
+    expect((env.data.wrote as string[]).length).toBeGreaterThan(0);
+    const adr = await fs.readFile(
+      path.join(root, 'docs/architecture/.foam/templates/adr.md'),
+      'utf8',
+    );
+    expect(adr).toContain('arch-wiki:template sha256=');
+  });
+
+  it('record-risk writes an idempotent row into risks.md', async () => {
+    const env = run(
+      ['record-risk', '--source', 'ingest', '--id', 'QA-007', '--conflict', 'clash', '--cwd', root],
+      root,
+    );
+    expect(env.ok).toBe(true);
+    expect(env.data.created).toBe(true);
+
+    const again = run(
+      ['record-risk', '--source', 'ingest', '--id', 'QA-007', '--conflict', 'clash', '--cwd', root],
+      root,
+    );
+    expect(again.data.created).toBe(false);
+
+    const content = await fs.readFile(path.join(root, 'docs/architecture/risks.md'), 'utf8');
+    expect(content).toContain('clash');
+  });
+
   it('fails with a JSON error and non-zero exit on unknown type', () => {
     let exitCode = 0;
     let stderr = '';
