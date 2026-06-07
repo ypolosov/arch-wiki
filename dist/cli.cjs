@@ -4901,7 +4901,8 @@ async function syncTemplates(input, deps) {
   }
   const counts = { synced: 0, missing: 0, stale: 0, curated: 0 };
   for (const e of entries) counts[e.status]++;
-  return { entries, counts, actionable: counts.missing + counts.stale, wrote };
+  const actionable = counts.missing + counts.stale;
+  return { entries, counts, actionable, drift: actionable > 0, wrote };
 }
 
 // src/migrations/0001-introduce-version-marker/up.ts
@@ -4976,7 +4977,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.2.2";
+var PLUGIN_VERSION = "0.2.3";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -5187,12 +5188,7 @@ async function main() {
       const write = !!opts.force;
       const result = await syncTemplates({ write }, { templates, repo, hash: sha256 });
       const warnings = result.counts.curated > 0 ? [`${result.counts.curated} curated template(s) preserved (not arch-wiki-managed)`] : void 0;
-      emit({
-        ok: write || result.actionable === 0,
-        command: "sync-templates",
-        data: result,
-        warnings
-      });
+      emit({ ok: true, command: "sync-templates", data: result, warnings });
       if (!write && !opts.dryRun && result.actionable > 0) process.exit(2);
     } catch (err) {
       fail("sync-templates", err);

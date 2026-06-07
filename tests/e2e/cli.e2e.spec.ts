@@ -79,12 +79,19 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
 
   it('sync-templates: check exits 2 when foam templates are missing; --force creates them', async () => {
     let exitCode = 0;
+    let stdout = '';
     try {
-      execFileSync('node', [CLI, 'sync-templates', '--cwd', root], { cwd: root, encoding: 'utf8' });
+      stdout = execFileSync('node', [CLI, 'sync-templates', '--cwd', root], { cwd: root, encoding: 'utf8' });
     } catch (e: unknown) {
-      exitCode = (e as { status: number }).status;
+      const err = e as { status: number; stdout: string };
+      exitCode = err.status;
+      stdout = err.stdout;
     }
     expect(exitCode).toBe(2);
+    // Drift is reported (exit 2 = CI gate) but the command itself succeeded.
+    const checkEnv = JSON.parse(stdout.trim().split('\n').pop()!) as Envelope;
+    expect(checkEnv.ok).toBe(true);
+    expect((checkEnv.data as { drift: boolean }).drift).toBe(true);
 
     const env = run(['sync-templates', '--force', '--cwd', root], root);
     expect(env.ok).toBe(true);

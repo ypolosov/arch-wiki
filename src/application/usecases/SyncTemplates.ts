@@ -19,6 +19,8 @@ export interface SyncTemplatesResult {
   counts: Record<SyncStatus, number>;
   /** Files that would change under `--force` (missing + stale). */
   actionable: number;
+  /** True when drift exists (missing or stale). Informational, not an error. */
+  drift: boolean;
   wrote: string[];
 }
 
@@ -88,5 +90,6 @@ export async function syncTemplates(
 
   const counts: Record<SyncStatus, number> = { synced: 0, missing: 0, stale: 0, curated: 0 };
   for (const e of entries) counts[e.status]++;
-  return { entries, counts, actionable: counts.missing + counts.stale, wrote };
+  const actionable = counts.missing + counts.stale;
+  return { entries, counts, actionable, drift: actionable > 0, wrote };
 }

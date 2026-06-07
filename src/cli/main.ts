@@ -311,12 +311,9 @@ async function main(): Promise<void> {
           result.counts.curated > 0
             ? [`${result.counts.curated} curated template(s) preserved (not arch-wiki-managed)`]
             : undefined;
-        emit({
-          ok: write || result.actionable === 0,
-          command: 'sync-templates',
-          data: result,
-          warnings,
-        });
+        // Drift is reported, not an error: ok stays true. The non-zero exit (in
+        // gate mode) is the CI signal; data.drift distinguishes "drift found".
+        emit({ ok: true, command: 'sync-templates', data: result, warnings });
         if (!write && !opts.dryRun && result.actionable > 0) process.exit(2);
       } catch (err) {
         fail('sync-templates', err);

@@ -36,6 +36,7 @@ describe('syncTemplates (integration)', () => {
     const r = await syncTemplates({ write: false }, { repo, templates, hash });
     expect(r.counts.missing).toBe(2);
     expect(r.actionable).toBe(2);
+    expect(r.drift).toBe(true);
     expect(r.wrote).toEqual([]);
     expect(await sys.exists(foam(root, 'adr.md'))).toBe(false);
   });
@@ -52,6 +53,7 @@ describe('syncTemplates (integration)', () => {
     const second = await syncTemplates({ write: false }, { repo, templates, hash });
     expect(second.counts.synced).toBe(2);
     expect(second.actionable).toBe(0);
+    expect(second.drift).toBe(false);
   });
 
   it('never overwrites a curated (unmarked) template, even with --force', async () => {
