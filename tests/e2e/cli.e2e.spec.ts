@@ -205,6 +205,41 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect((tr.data.issues as Array<{ key: string }>)[0]!.key).toBe('GRM-431');
   });
 
+  it('books-plan renders a local-rag-pinned plan; ingest --enrich writes Related Patterns', async () => {
+    const plan = run(['books-plan', 'enrich', '--drivers', 'QA-007', '--cwd', root], root);
+    expect(plan.ok).toBe(true);
+    expect((plan.data as { corpus: string }).corpus).toBe('local-rag');
+    expect((plan.data as { optional: boolean }).optional).toBe(true);
+
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, 'drivers/quality-attributes'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, 'drivers/quality-attributes/QA-007-caching.md'),
+      '---\ntype: quality-attribute\n---\n# QA-007: Caching\n',
+    );
+    const answers = JSON.stringify([
+      { key: 'enrich:QA-007', hits: [{ source: 'arc42.pdf', score: 0.9, excerpt: 'cache aside' }] },
+    ]);
+    const env = run(['ingest', '--enrich', '--rag-results', answers, '--cwd', root], root);
+    expect(env.ok).toBe(true);
+    const content = await fs.readFile(path.join(wiki, 'drivers/quality-attributes/QA-007-caching.md'), 'utf8');
+    expect(content).toContain('## Related Patterns');
+    expect(content).toContain('arc42.pdf');
+  });
+
+  it('ingest --enrich with malformed --rag-results exits 2', () => {
+    let exitCode = 0;
+    try {
+      execFileSync('node', [CLI, 'ingest', '--enrich', '--rag-results', 'not-json', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+    } catch (e: unknown) {
+      exitCode = (e as { status: number }).status;
+    }
+    expect(exitCode).toBe(2);
+  });
+
   it('fails with a JSON error and non-zero exit on unknown type', () => {
     let exitCode = 0;
     let stderr = '';

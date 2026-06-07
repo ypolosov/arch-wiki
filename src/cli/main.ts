@@ -19,6 +19,9 @@ import { parseQuestionnaire } from '../application/usecases/ParseQuestionnaire';
 import { renderIssuePayload, IssueKind, IssueRole } from '../application/usecases/RenderIssuePayload';
 import { recordIssue } from '../application/usecases/RecordIssue';
 import { trace } from '../application/usecases/Trace';
+import { enrichDriver } from '../application/usecases/EnrichDriver';
+import { BooksRagPlanner } from '../adapters/rag/BooksRagPlanner';
+import { BooksAnswer, BooksQueryInput } from '../application/ports/BooksRagPort';
 import { lintWiki } from '../application/usecases/LintWiki';
 import { recordRisk } from '../application/usecases/RecordRisk';
 import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
@@ -310,6 +313,57 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'ingest-questionnaire', data: result });
       } catch (err) {
         fail('ingest-questionnaire', err);
+      }
+    });
+
+  cli
+    .command('books-plan <site>', 'render a deterministic books-rag query plan (local-rag)')
+    .option('--topic <topic>', 'topic (hypothesis | questionnaire-rozanski)')
+    .option('--drivers <ids>', 'comma-separated driver ids (enrich)')
+    .option('--kind-hints <kinds>', 'comma-separated kind hints (hypothesis)')
+    .option('--viewpoints <names>', 'comma-separated viewpoints (questionnaire-rozanski)')
+    .action(async (site: string, opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        let input: BooksQueryInput;
+        if (site === 'hypothesis') {
+          if (!opts.topic) throw new DomainError('missing --topic', 1);
+          input = { site, topic: String(opts.topic), kindHints: opts['kindHints'] ? csv(opts['kindHints']) : undefined };
+        } else if (site === 'questionnaire-rozanski') {
+          if (!opts.topic) throw new DomainError('missing --topic', 1);
+          input = { site, topic: String(opts.topic), viewpoints: opts.viewpoints ? csv(opts.viewpoints) : undefined };
+        } else if (site === 'enrich') {
+          if (!opts.drivers) throw new DomainError('missing --drivers', 1);
+          input = { site, drivers: csv(opts.drivers) };
+        } else {
+          throw new DomainError(`unknown books-plan site "${site}" (valid: hypothesis, questionnaire-rozanski, enrich)`, 1);
+        }
+        emit({ ok: true, command: 'books-plan', data: new BooksRagPlanner().renderPlan(input) });
+      } catch (err) {
+        fail('books-plan', err);
+      }
+    });
+
+  cli
+    .command('ingest', 'ingest helper: --enrich writes ## Related Patterns from books-rag answers')
+    .option('--enrich', 'enrich drivers with Related Patterns')
+    .option('--rag-results <json>', 'BooksAnswer[] JSON from local-rag (keyed enrich:<id>)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.enrich) throw new DomainError('ingest: only --enrich is supported as a CLI step', 1);
+        if (!opts['ragResults']) throw new DomainError('ingest --enrich: missing --rag-results', 2);
+        let answers: BooksAnswer[];
+        try {
+          const parsed = JSON.parse(String(opts['ragResults']));
+          if (!Array.isArray(parsed)) throw new Error('not an array');
+          answers = parsed as BooksAnswer[];
+        } catch (e) {
+          throw new DomainError(`ingest --enrich: malformed --rag-results: ${(e as Error).message}`, 2);
+        }
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await enrichDriver({ answers }, { repo });
+        emit({ ok: true, command: 'ingest', data: result });
+      } catch (err) {
+        fail('ingest', err);
       }
     });
 
