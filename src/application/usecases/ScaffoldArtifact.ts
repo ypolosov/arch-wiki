@@ -4,8 +4,10 @@ import { DomainError } from '../../domain/errors';
 import { nextId } from '../../domain/services/IdAllocator';
 import { requireSlug } from '../../domain/services/KebabSlug';
 import { render } from '../../domain/services/TemplateEngine';
+import { deepMerge } from '../../domain/services/DeepMerge';
 import { ClockPort } from '../ports/ClockPort';
 import { TemplatePort } from '../ports/TemplatePort';
+import { FrontmatterParserPort } from '../ports/FrontmatterParserPort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 
@@ -14,6 +16,10 @@ export interface ScaffoldInput {
   title: string;
   slug?: string;
   drivers?: string[];
+  /** Typed frontmatter fields injected over the template's YAML (traceability). */
+  frontmatter?: Record<string, unknown>;
+  /** Forces the filename stem (e.g. `hypothesis-<slug>`); slug still required. */
+  slugPrefix?: string;
   dryRun?: boolean;
 }
 
@@ -22,6 +28,7 @@ export interface ScaffoldDeps {
   templates: TemplatePort;
   clock: ClockPort;
   config: ProjectConfig;
+  frontmatter: FrontmatterParserPort;
 }
 
 export interface ScaffoldResult {
@@ -48,7 +55,7 @@ export async function scaffoldArtifact(
   deps: ScaffoldDeps,
 ): Promise<ScaffoldResult> {
   const { spec } = input;
-  const { repo, templates, clock, config } = deps;
+  const { repo, templates, clock, config, frontmatter } = deps;
   const warnings: string[] = [];
 
   // ITER files carry no slug; everything else needs one.
@@ -60,7 +67,9 @@ export async function scaffoldArtifact(
     id = nextId(spec, await repo.existingNumbers(spec));
   }
 
-  const filename = spec.filename(id, slug);
+  // slugPrefix forces a `<prefix>-<slug>` stem (e.g. hypothesis-<slug>).
+  const fileSlug = input.slugPrefix ? `${input.slugPrefix}-${slug}` : slug;
+  const filename = spec.filename(id, fileSlug);
   const relPath = `${spec.folder}/${filename}`;
   if (await repo.exists(relPath)) {
     throw new DomainError(`artifact already exists: ${relPath}`, 2);
@@ -107,7 +116,15 @@ export async function scaffoldArtifact(
     };
   }
 
-  await repo.write(relPath, output);
+  // Inject typed frontmatter over the rendered template's YAML. Skipped when no
+  // fields are supplied so the plain-scaffold output stays byte-identical.
+  let finalOutput = output;
+  if (input.frontmatter && Object.keys(input.frontmatter).length > 0) {
+    const doc = frontmatter.parse(output);
+    const merged = deepMerge(doc.frontmatter, input.frontmatter);
+    finalOutput = frontmatter.stringify({ frontmatter: merged, content: doc.content });
+  }
+  await repo.write(relPath, finalOutput);
 
   let hubUpdated = false;
   const hub = config.hubFile(spec.kind);

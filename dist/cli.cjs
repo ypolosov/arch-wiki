@@ -3301,10 +3301,10 @@ var require_stringify = __commonJS({
       data = Object.assign({}, file.data, data);
       const open = opts.delimiters[0];
       const close = opts.delimiters[1];
-      const matter2 = engine.stringify(data, options2).trim();
+      const matter3 = engine.stringify(data, options2).trim();
       let buf = "";
-      if (matter2 !== "{}") {
-        buf = newline(open) + newline(matter2) + newline(close);
+      if (matter3 !== "{}") {
+        buf = newline(open) + newline(matter3) + newline(close);
       }
       if (typeof file.excerpt === "string" && file.excerpt !== "") {
         if (str2.indexOf(file.excerpt.trim()) === -1) {
@@ -3410,19 +3410,19 @@ var require_gray_matter = __commonJS({
     var toFile = require_to_file();
     var parse2 = require_parse();
     var utils = require_utils();
-    function matter2(input, options2) {
+    function matter3(input, options2) {
       if (input === "") {
         return { data: {}, content: input, excerpt: "", orig: input };
       }
       let file = toFile(input);
-      const cached = matter2.cache[file.content];
+      const cached = matter3.cache[file.content];
       if (!options2) {
         if (cached) {
           file = Object.assign({}, cached);
           file.orig = cached.orig;
           return file;
         }
-        matter2.cache[file.content] = file;
+        matter3.cache[file.content] = file;
       }
       return parseMatter(file, options2);
     }
@@ -3444,7 +3444,7 @@ var require_gray_matter = __commonJS({
       }
       str2 = str2.slice(openLen);
       const len = str2.length;
-      const language = matter2.language(str2, opts);
+      const language = matter3.language(str2, opts);
       if (language.name) {
         file.language = language.name;
         str2 = str2.slice(language.raw.length);
@@ -3479,24 +3479,24 @@ var require_gray_matter = __commonJS({
       }
       return file;
     }
-    matter2.engines = engines2;
-    matter2.stringify = function(file, data, options2) {
-      if (typeof file === "string") file = matter2(file, options2);
+    matter3.engines = engines2;
+    matter3.stringify = function(file, data, options2) {
+      if (typeof file === "string") file = matter3(file, options2);
       return stringify(file, data, options2);
     };
-    matter2.read = function(filepath, options2) {
+    matter3.read = function(filepath, options2) {
       const str2 = fs2.readFileSync(filepath, "utf8");
-      const file = matter2(str2, options2);
+      const file = matter3(str2, options2);
       file.path = filepath;
       return file;
     };
-    matter2.test = function(str2, options2) {
+    matter3.test = function(str2, options2) {
       return utils.startsWith(str2, defaults(options2).delimiters[0]);
     };
-    matter2.language = function(str2, options2) {
+    matter3.language = function(str2, options2) {
       const opts = defaults(options2);
       const open = opts.delimiters[0];
-      if (matter2.test(str2)) {
+      if (matter3.test(str2)) {
         str2 = str2.slice(open.length);
       }
       const language = str2.slice(0, str2.search(/\r?\n/));
@@ -3505,16 +3505,16 @@ var require_gray_matter = __commonJS({
         name: language ? language.trim() : ""
       };
     };
-    matter2.cache = {};
-    matter2.clearCache = function() {
-      matter2.cache = {};
+    matter3.cache = {};
+    matter3.clearCache = function() {
+      matter3.cache = {};
     };
-    module2.exports = matter2;
+    module2.exports = matter3;
   }
 });
 
 // src/cli/main.ts
-var path6 = __toESM(require("node:path"));
+var path8 = __toESM(require("node:path"));
 var import_node_crypto = require("node:crypto");
 
 // node_modules/cac/dist/index.mjs
@@ -4190,8 +4190,24 @@ var PluginTemplateStore = class {
   }
 };
 
-// src/adapters/repo/FoamWikiRepository.ts
+// src/adapters/template/FilePayloadTemplateStore.ts
 var path3 = __toESM(require("node:path"));
+var FilePayloadTemplateStore = class {
+  constructor(dir, fs2) {
+    this.dir = dir;
+    this.fs = fs2;
+  }
+  async loadByName(name) {
+    const p = path3.join(this.dir, name);
+    if (!await this.fs.exists(p)) {
+      throw new DomainError(`payload template not found: ${name} (looked in ${this.dir})`, 3);
+    }
+    return this.fs.readFile(p);
+  }
+};
+
+// src/adapters/repo/FoamWikiRepository.ts
+var path4 = __toESM(require("node:path"));
 var import_gray_matter = __toESM(require_gray_matter());
 
 // src/domain/model/ArtifactId.ts
@@ -4420,7 +4436,7 @@ var FoamWikiRepository = class {
     this.fs = fs2;
   }
   abs(relPath) {
-    return path3.join(this.root, relPath);
+    return path4.join(this.root, relPath);
   }
   async readLintBaseline() {
     const f = this.abs(".arch-wiki/lint-baseline.json");
@@ -4434,23 +4450,23 @@ var FoamWikiRepository = class {
   }
   async listFiles() {
     const files = await this.fs.walk(this.root);
-    return files.map((abs) => path3.relative(this.root, abs).split(path3.sep).join("/")).filter((rel) => !rel.startsWith(".git/") && !rel.startsWith("node_modules/"));
+    return files.map((abs) => path4.relative(this.root, abs).split(path4.sep).join("/")).filter((rel) => !rel.startsWith(".git/") && !rel.startsWith("node_modules/"));
   }
   async loadPages() {
     const files = await this.fs.walk(this.root);
     const pages = [];
     for (const absFile of files) {
       if (!absFile.endsWith(".md")) continue;
-      const rel = path3.relative(this.root, absFile).split(path3.sep).join("/");
+      const rel = path4.relative(this.root, absFile).split(path4.sep).join("/");
       const top = rel.split("/")[0];
       if (EXCLUDED_TOP.has(top)) continue;
       const raw = await this.fs.readFile(absFile);
       const parsed = (0, import_gray_matter.default)(raw);
       const { links, mdLinks, headings, labels, sectionWikilinkCounts } = scanPage(parsed.content);
-      const dir = path3.posix.dirname(rel);
+      const dir = path4.posix.dirname(rel);
       pages.push({
         relPath: rel,
-        basename: path3.basename(rel, ".md"),
+        basename: path4.basename(rel, ".md"),
         folder: dir === "." ? "" : dir,
         frontmatter: parsed.data ?? {},
         links,
@@ -4506,6 +4522,10 @@ var FoamWikiRepository = class {
   async read(relPath) {
     return this.fs.readFile(this.abs(relPath));
   }
+  async readParsed(relPath) {
+    const parsed = (0, import_gray_matter.default)(await this.fs.readFile(this.abs(relPath)));
+    return { frontmatter: parsed.data ?? {}, content: parsed.content };
+  }
   async appendHubLink(hubRelPath, basename2, bullet) {
     const abs = this.abs(hubRelPath);
     if (!await this.fs.exists(abs)) return false;
@@ -4519,14 +4539,14 @@ var FoamWikiRepository = class {
 };
 
 // src/adapters/version/FileVersionStore.ts
-var path4 = __toESM(require("node:path"));
+var path5 = __toESM(require("node:path"));
 var FileVersionStore = class {
   constructor(root, fs2) {
     this.root = root;
     this.fs = fs2;
   }
   file() {
-    return path4.join(this.root, ".arch-wiki", "version.json");
+    return path5.join(this.root, ".arch-wiki", "version.json");
   }
   async read() {
     const f = this.file();
@@ -4540,7 +4560,7 @@ var FileVersionStore = class {
 };
 
 // src/adapters/config/FileProjectConfigStore.ts
-var path5 = __toESM(require("node:path"));
+var path6 = __toESM(require("node:path"));
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -5020,8 +5040,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path7, errorMaps, issueData } = params;
-  const fullPath = [...path7, ...issueData.path || []];
+  const { data, path: path9, errorMaps, issueData } = params;
+  const fullPath = [...path9, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -5137,11 +5157,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path7, key) {
+  constructor(parent, value, path9, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path7;
+    this._path = path9;
     this._key = key;
   }
   get path() {
@@ -8640,7 +8660,7 @@ var FileProjectConfigStore = class {
     this.fs = fs2;
   }
   file() {
-    return path5.join(this.root, ".arch-wiki", "config.json");
+    return path6.join(this.root, ".arch-wiki", "config.json");
   }
   async read() {
     const f = this.file();
@@ -8659,6 +8679,80 @@ var FileProjectConfigStore = class {
       );
     }
     return r.data;
+  }
+};
+
+// src/adapters/ledger/FileLedgerStore.ts
+var path7 = __toESM(require("node:path"));
+var ISSUES_FILE = "created-issues.json";
+var PAGES_FILE = "published-pages.json";
+var SCHEMA_VERSION = 1;
+var FileLedgerStore = class {
+  constructor(root, fs2) {
+    this.root = root;
+    this.fs = fs2;
+  }
+  file(name) {
+    return path7.join(this.root, ".arch-wiki", name);
+  }
+  async readArray(name, field) {
+    const f = this.file(name);
+    if (!await this.fs.exists(f)) return [];
+    const parsed = JSON.parse(await this.fs.readFile(f));
+    const rows = parsed[field];
+    return Array.isArray(rows) ? rows : [];
+  }
+  async writeArray(name, field, rows) {
+    await this.fs.writeFile(this.file(name), `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, [field]: rows }, null, 2)}
+`);
+  }
+  async readIssues() {
+    return this.readArray(ISSUES_FILE, "issues");
+  }
+  async appendIssue(row) {
+    const rows = await this.readIssues();
+    if (rows.some((r) => r.key === row.key && r.sourceId === row.sourceId && r.kind === row.kind && r.role === row.role)) {
+      return false;
+    }
+    rows.push(row);
+    rows.sort((a, b) => a.key.localeCompare(b.key));
+    await this.writeArray(ISSUES_FILE, "issues", rows);
+    return true;
+  }
+  async readPages() {
+    return this.readArray(PAGES_FILE, "pages");
+  }
+  async appendPage(row) {
+    const rows = await this.readPages();
+    if (rows.some((r) => r.page === row.page && r.source === row.source)) return false;
+    rows.push(row);
+    rows.sort((a, b) => a.page.localeCompare(b.page));
+    await this.writeArray(PAGES_FILE, "pages", rows);
+    return true;
+  }
+};
+
+// src/adapters/frontmatter/GrayMatterParser.ts
+var import_gray_matter2 = __toESM(require_gray_matter());
+function sortKeysDeep(value) {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value).sort()) {
+      out[k] = sortKeysDeep(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+var GrayMatterParser = class {
+  parse(raw) {
+    const r = (0, import_gray_matter2.default)(raw);
+    return { frontmatter: r.data ?? {}, content: r.content };
+  }
+  stringify(doc) {
+    if (Object.keys(doc.frontmatter).length === 0) return doc.content;
+    return import_gray_matter2.default.stringify(doc.content, sortKeysDeep(doc.frontmatter));
   }
 };
 
@@ -8764,13 +8858,27 @@ function render(template, vars) {
   return { output, unresolved: [...unresolved] };
 }
 
+// src/domain/services/DeepMerge.ts
+function isPlainObject(v) {
+  return v != null && typeof v === "object" && !Array.isArray(v);
+}
+function deepMerge(base, override) {
+  const out = { ...base };
+  for (const key of Object.keys(override)) {
+    const o = override[key];
+    const b = out[key];
+    out[key] = isPlainObject(b) && isPlainObject(o) ? deepMerge(b, o) : o;
+  }
+  return out;
+}
+
 // src/application/usecases/ScaffoldArtifact.ts
 function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 async function scaffoldArtifact(input, deps) {
   const { spec } = input;
-  const { repo, templates, clock, config } = deps;
+  const { repo, templates, clock, config, frontmatter } = deps;
   const warnings = [];
   const needsSlug = spec.kind !== "iteration";
   const slug = needsSlug ? input.slug?.trim() || requireSlug(input.title) : "";
@@ -8778,7 +8886,8 @@ async function scaffoldArtifact(input, deps) {
   if (spec.prefix) {
     id = nextId(spec, await repo.existingNumbers(spec));
   }
-  const filename = spec.filename(id, slug);
+  const fileSlug = input.slugPrefix ? `${input.slugPrefix}-${slug}` : slug;
+  const filename = spec.filename(id, fileSlug);
   const relPath = `${spec.folder}/${filename}`;
   if (await repo.exists(relPath)) {
     throw new DomainError(`artifact already exists: ${relPath}`, 2);
@@ -8820,7 +8929,13 @@ async function scaffoldArtifact(input, deps) {
       warnings
     };
   }
-  await repo.write(relPath, output);
+  let finalOutput = output;
+  if (input.frontmatter && Object.keys(input.frontmatter).length > 0) {
+    const doc = frontmatter.parse(output);
+    const merged = deepMerge(doc.frontmatter, input.frontmatter);
+    finalOutput = frontmatter.stringify({ frontmatter: merged, content: doc.content });
+  }
+  await repo.write(relPath, finalOutput);
   let hubUpdated = false;
   const hub = config.hubFile(spec.kind);
   if (hub) {
@@ -8838,6 +8953,294 @@ async function scaffoldArtifact(input, deps) {
     unresolvedDrivers,
     warnings
   };
+}
+
+// src/domain/services/KeyedTable.ts
+function upsertKeyedRow(content, keyLine, row, spec) {
+  if (content == null) {
+    return { content: `${spec.scaffold}${row}
+`, changed: true };
+  }
+  const lines = content.split("\n");
+  const idx = lines.findIndex((l) => l.includes(keyLine));
+  if (idx >= 0) {
+    if (lines[idx] === row) return { content, changed: false };
+    lines[idx] = row;
+    return { content: lines.join("\n"), changed: true };
+  }
+  const base = content.length === 0 || content.endsWith("\n") ? content : `${content}
+`;
+  const next = content.includes(spec.headerMark) ? `${base}${row}
+` : `${base}
+${spec.header}${row}
+`;
+  return { content: next, changed: true };
+}
+
+// src/application/usecases/UpdateKanban.ts
+var KANBAN_COLUMNS = ["backlog", "in-progress", "done"];
+var KANBAN_FILE = "kanban.md";
+var HEADER = "| Card | Column |\n| --- | --- |\n";
+var SPEC = {
+  headerMark: "| Card |",
+  header: HEADER,
+  scaffold: "---\ntype: kanban\ntags: [kanban]\n---\n\n# Kanban\n\nBacklog of drivers and tasks. Maintained by `arch-wiki update-kanban` \u2014\none card per id; moving a card needs an explicit `--column`.\n\n" + HEADER
+};
+function columnOf(line) {
+  const m = /\|\s*([a-z-]+)\s*\|?\s*$/.exec(line.trim());
+  const c = m?.[1];
+  return KANBAN_COLUMNS.includes(c ?? "") ? c : "backlog";
+}
+async function updateKanban(input, deps) {
+  const { repo } = deps;
+  const id = input.add.trim();
+  if (!id) throw new DomainError("update-kanban: missing --add", 1);
+  if (input.column && !KANBAN_COLUMNS.includes(input.column)) {
+    throw new DomainError(`update-kanban: invalid --column "${input.column}"`, 1);
+  }
+  const exists = await repo.exists(KANBAN_FILE);
+  const content = exists ? await repo.read(KANBAN_FILE) : null;
+  const keyLine = `[[${id}]]`;
+  if (content != null && content.includes(keyLine) && !input.column) {
+    const cur = content.split("\n").find((l) => l.includes(keyLine));
+    return { path: KANBAN_FILE, created: false, changed: false, column: columnOf(cur) };
+  }
+  const column = input.column ?? "backlog";
+  const row = `| [[${id}]] | ${column} |`;
+  const r = upsertKeyedRow(content, keyLine, row, SPEC);
+  if (r.changed) await repo.write(KANBAN_FILE, r.content);
+  return { path: KANBAN_FILE, created: !exists, changed: r.changed, column };
+}
+
+// src/application/usecases/ScaffoldHypothesis.ts
+async function scaffoldHypothesis(input, deps) {
+  const { repo } = deps;
+  if (!input.title?.trim()) throw new DomainError("hypothesis: missing --title", 1);
+  if (input.from && !await repo.exists(input.from)) {
+    throw new DomainError(`hypothesis: --from not found: ${input.from}`, 2);
+  }
+  const frontmatter = { status: "hypothesis" };
+  if (input.from) frontmatter.source = input.from;
+  if (input.driverCandidate) frontmatter.realizes_driver = [input.driverCandidate];
+  const result = await scaffoldArtifact(
+    {
+      spec: ARTIFACT_SPECS["concept"],
+      title: input.title,
+      slug: input.slug,
+      slugPrefix: "hypothesis",
+      frontmatter,
+      dryRun: input.dryRun
+    },
+    deps
+  );
+  if (input.dryRun) return { ...result, kanbanCard: null };
+  const card = result.path.replace(/^.*\//, "").replace(/\.md$/, "");
+  await updateKanban({ add: card }, { repo });
+  return { ...result, kanbanCard: card };
+}
+
+// src/application/usecases/ScaffoldQuestionnaire.ts
+var QUESTIONNAIRE_METHODS = ["qaw", "rozanski", "driver-gap"];
+function isoDate2(d) {
+  return d.toISOString().slice(0, 10);
+}
+async function scaffoldQuestionnaire(input, deps) {
+  const { repo, payloads, clock, frontmatter } = deps;
+  if (!QUESTIONNAIRE_METHODS.includes(input.method)) {
+    throw new DomainError(
+      `unknown questionnaire method "${input.method}" (valid: ${QUESTIONNAIRE_METHODS.join(", ")})`,
+      1
+    );
+  }
+  if (!input.topic?.trim()) throw new DomainError("questionnaire: missing --topic", 1);
+  const date = isoDate2(clock.now());
+  const topicSlug = input.slug?.trim() || requireSlug(input.topic);
+  const relPath = `raw/questionnaires/${input.method}-${date}-${topicSlug}.md`;
+  if (await repo.exists(relPath)) {
+    throw new DomainError(`questionnaire already exists: ${relPath}`, 2);
+  }
+  const related = input.relatedDrivers ?? [];
+  const template = await payloads.loadByName(`questionnaire-${input.method}.md`);
+  const { output, unresolved } = render(template, {
+    topic: input.topic,
+    date,
+    related_drivers: related.length ? related.map((d) => `[[${d}]]`).join(", ") : "\u2014"
+  });
+  const warnings = unresolved.length ? [`unresolved template tokens: ${unresolved.join(", ")}`] : [];
+  const doc = frontmatter.parse(output);
+  const merged = deepMerge(doc.frontmatter, {
+    method: input.method,
+    topic: input.topic,
+    date,
+    status: "open",
+    related_drivers: related
+  });
+  const finalOutput = frontmatter.stringify({ frontmatter: merged, content: doc.content });
+  if (input.dryRun) {
+    return { path: relPath, created: false, method: input.method, warnings };
+  }
+  await repo.write(relPath, finalOutput);
+  return { path: relPath, created: true, method: input.method, warnings };
+}
+
+// src/application/usecases/ParseQuestionnaire.ts
+var ID = /^[A-Za-z]+-\d+$/;
+var HEADING2 = /^#{1,6}\s+(.+?)\s*$/;
+var CLOSES = /(?:^|\s)closes:\s*([A-Za-z]+-\d+)/i;
+var CONTRADICTION = /(?:^|\s)contradiction:\s*(.+?)\s*$/i;
+async function parseQuestionnaire(input, deps) {
+  const { repo } = deps;
+  const from = input.from?.trim();
+  if (!from) throw new DomainError("ingest-questionnaire: missing --from", 1);
+  if (!from.startsWith("raw/")) {
+    throw new DomainError(`ingest-questionnaire: --from must be under raw/: ${from}`, 2);
+  }
+  if (!await repo.exists(from)) {
+    throw new DomainError(`ingest-questionnaire: --from not found: ${from}`, 2);
+  }
+  const { frontmatter, content } = await repo.readParsed(from);
+  const hasFm = Object.keys(frontmatter).length > 0;
+  let method = null;
+  let relatedDrivers = [];
+  if (hasFm) {
+    const status = String(frontmatter.status ?? "").toLowerCase();
+    if (status === "open") {
+      throw new DomainError("ingest-questionnaire: questionnaire not yet answered (status: open)", 2);
+    }
+    const m = frontmatter.method;
+    if (typeof m !== "string" || !m) {
+      throw new DomainError("ingest-questionnaire: questionnaire missing method frontmatter", 2);
+    }
+    method = m;
+    const rd = frontmatter.related_drivers;
+    if (!Array.isArray(rd)) {
+      throw new DomainError("ingest-questionnaire: questionnaire missing related_drivers frontmatter", 2);
+    }
+    relatedDrivers = rd.map(String).filter((d) => ID.test(d));
+  }
+  const answers = [];
+  const contradictions = [];
+  let section = "";
+  for (const line of content.split("\n")) {
+    const h = HEADING2.exec(line);
+    if (h) {
+      section = h[1];
+      continue;
+    }
+    const c = CLOSES.exec(line);
+    if (c) answers.push({ section, closesDriver: c[1] });
+    const x = CONTRADICTION.exec(line);
+    if (x) contradictions.push({ section, conflict: x[1] });
+  }
+  const closed = new Set(answers.map((a) => a.closesDriver));
+  const unanswered = relatedDrivers.filter((d) => !closed.has(d)).sort();
+  answers.sort((a, b) => a.closesDriver.localeCompare(b.closesDriver) || a.section.localeCompare(b.section));
+  contradictions.sort((a, b) => a.section.localeCompare(b.section) || a.conflict.localeCompare(b.conflict));
+  return { source: from, method, relatedDrivers, answers, unanswered, contradictions };
+}
+
+// src/application/usecases/RenderIssuePayload.ts
+var ISSUE_KINDS = ["arch", "techdesign"];
+var ISSUE_ROLES = ["be", "fe", "do"];
+function cleanTitle(heading) {
+  return heading.replace(/^\s*[A-Za-z]+-\d+\S*:\s*/, "").trim();
+}
+async function renderIssuePayload(input, deps) {
+  const { repo, payloads, config, ledger, hash } = deps;
+  const from = input.from?.trim();
+  if (!from) throw new DomainError("render-issue: missing --from", 1);
+  if (!ISSUE_KINDS.includes(input.kind)) {
+    throw new DomainError(`render-issue: --kind must be one of ${ISSUE_KINDS.join("|")}`, 1);
+  }
+  if (input.kind === "techdesign" && !input.role) {
+    throw new DomainError("render-issue: --role is required for --kind techdesign", 1);
+  }
+  if (input.role && !ISSUE_ROLES.includes(input.role)) {
+    throw new DomainError(`render-issue: --role must be one of ${ISSUE_ROLES.join("|")}`, 1);
+  }
+  const role = input.role ?? null;
+  const prefix = config.taskPrefix(input.kind, input.role);
+  const language = config.language();
+  const basename2 = await repo.resolveBasename(from);
+  if (!basename2) throw new DomainError(`render-issue: cannot resolve --from "${from}"`, 2);
+  const page = (await repo.loadPages()).find((p) => p.basename === basename2);
+  const title = page?.headings[0] ? cleanTitle(page.headings[0]) : basename2;
+  const driverLink = `[[${basename2}|${from}]]`;
+  const templateName = input.kind === "arch" ? "issue-arch.md" : "issue-techdesign.md";
+  const template = await payloads.loadByName(templateName);
+  const { output, unresolved } = render(template, {
+    prefix,
+    title,
+    source: basename2,
+    driver: driverLink
+  });
+  const warnings = unresolved.length ? [`unresolved template tokens: ${unresolved.join(", ")}`] : [];
+  const canonical = JSON.stringify({ kind: input.kind, role, prefix, language, title, source: basename2, drivers: [driverLink] });
+  const contentHash = hash(canonical);
+  const existing = (await ledger.readIssues()).find(
+    (r) => r.sourceId === from && r.kind === input.kind && r.role === role
+  );
+  return {
+    kind: input.kind,
+    role,
+    prefix,
+    language,
+    title,
+    issueTitle: `${prefix} ${title}`,
+    sourceId: from,
+    drivers: [driverLink],
+    contentHash,
+    payload: output,
+    alreadyCreated: existing != null,
+    drifted: existing != null && existing.contentHash !== contentHash,
+    key: existing?.key ?? null,
+    warnings
+  };
+}
+
+// src/application/usecases/RecordIssue.ts
+async function recordIssue(input, deps) {
+  const { repo, ledger, frontmatter, clock } = deps;
+  const id = input.id?.trim();
+  const key = input.key?.trim();
+  if (!id) throw new DomainError("record-issue: missing --id", 1);
+  if (!key) throw new DomainError("record-issue: missing --key", 1);
+  if (!ISSUE_KINDS.includes(input.kind)) {
+    throw new DomainError(`record-issue: --kind must be one of ${ISSUE_KINDS.join("|")}`, 1);
+  }
+  if (input.kind === "techdesign" && !input.role) {
+    throw new DomainError("record-issue: --role is required for --kind techdesign", 1);
+  }
+  if (input.role && !ISSUE_ROLES.includes(input.role)) {
+    throw new DomainError(`record-issue: --role must be one of ${ISSUE_ROLES.join("|")}`, 1);
+  }
+  if (!input.hash?.trim()) throw new DomainError("record-issue: missing --hash", 1);
+  const ledgerAppended = await ledger.appendIssue({
+    key,
+    sourceId: id,
+    kind: input.kind,
+    role: input.role ?? null,
+    contentHash: input.hash,
+    createdAt: clock.now().toISOString(),
+    system: input.system?.trim() || "jira"
+  });
+  let frontmatterUpdated = false;
+  let pagePath = null;
+  const basename2 = await repo.resolveBasename(id);
+  if (basename2) {
+    const page = (await repo.loadPages()).find((p) => p.basename === basename2);
+    if (page) {
+      pagePath = page.relPath;
+      const { frontmatter: fm, content } = await repo.readParsed(page.relPath);
+      const existing = Array.isArray(fm.realized_by) ? fm.realized_by.map(String) : [];
+      if (!existing.includes(key)) {
+        const merged = deepMerge(fm, { realized_by: [...existing, key].sort() });
+        await repo.write(page.relPath, frontmatter.stringify({ frontmatter: merged, content }));
+        frontmatterUpdated = true;
+      }
+    }
+  }
+  return { key, ledgerAppended, frontmatterUpdated, path: pagePath };
 }
 
 // src/domain/model/WikiPage.ts
@@ -8872,6 +9275,68 @@ function pagesOfKind(g, kinds) {
     const k = kindOfPage(p);
     return k != null && set.has(k);
   });
+}
+
+// src/application/usecases/Trace.ts
+var DRIVER_KINDS = ["use-case", "quality-attribute", "constraint", "concern"];
+async function trace(id, deps) {
+  const { repo, ledger } = deps;
+  const wanted = id?.trim();
+  if (!wanted) throw new DomainError("trace: missing <ID>", 1);
+  const basename2 = await repo.resolveBasename(wanted);
+  if (!basename2) throw new DomainError(`trace: cannot resolve "${wanted}"`, 2);
+  const [pages, allFiles, ledgerIssues, ledgerPages] = await Promise.all([
+    repo.loadPages(),
+    repo.listFiles(),
+    ledger.readIssues(),
+    ledger.readPages()
+  ]);
+  const g = buildGraph(pages);
+  const page = g.byBasename.get(basename2);
+  const kind = kindOfPage(page);
+  const fileSet = new Set(allFiles);
+  const raw = [];
+  const source = page.frontmatter.source;
+  if (typeof source === "string" && source) {
+    raw.push({ raw: source, exists: fileSet.has(source) });
+  }
+  const driverSet = new Set(pagesOfKind(g, DRIVER_KINDS).map((p) => p.basename));
+  const drivers = page.links.map((l) => l.target).filter((t) => driverSet.has(t) && t !== basename2);
+  const adrSet = new Set(pagesOfKind(g, ["adr"]).map((p) => p.basename));
+  let adrs;
+  if (kind != null && DRIVER_KINDS.includes(kind)) {
+    adrs = pagesOfKind(g, ["adr", "iteration"]).filter((c) => c.links.some((l) => l.target === basename2)).map((c) => c.basename);
+  } else {
+    adrs = page.links.map((l) => l.target).filter((t) => adrSet.has(t));
+  }
+  const ledgerKeys = new Map(ledgerIssues.map((r) => [r.key, r]));
+  const realizedBy = page.frontmatter.realized_by;
+  const issues = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (Array.isArray(realizedBy)) {
+    for (const k of realizedBy.map(String)) {
+      const row = ledgerKeys.get(k);
+      issues.push({ key: k, system: row?.system, stale: row == null });
+      seen.add(k);
+    }
+  }
+  for (const r of ledgerIssues) {
+    if (r.sourceId === wanted && !seen.has(r.key)) {
+      issues.push({ key: r.key, system: r.system, stale: false });
+      seen.add(r.key);
+    }
+  }
+  const showcase = ledgerPages.filter((r) => r.source === basename2 || r.source === page.relPath || r.source === wanted).map((r) => ({ page: r.page, hash: r.contentHash }));
+  return {
+    id: wanted,
+    basename: basename2,
+    kind,
+    raw,
+    drivers: [...new Set(drivers)].sort(),
+    adrs: [...new Set(adrs)].sort(),
+    issues: issues.sort((a, b) => a.key.localeCompare(b.key)),
+    showcase: showcase.sort((a, b) => a.page.localeCompare(b.page))
+  };
 }
 
 // src/domain/services/Levenshtein.ts
@@ -8924,7 +9389,7 @@ var STRUCTURAL = /* @__PURE__ */ new Set([
   "utility-tree",
   "kanban"
 ]);
-var DRIVER_KINDS = ["use-case", "quality-attribute", "constraint", "concern"];
+var DRIVER_KINDS2 = ["use-case", "quality-attribute", "constraint", "concern"];
 function runLint(g, ctx = {}) {
   const findings = [];
   const inbound = inboundCounts(g);
@@ -8982,7 +9447,7 @@ function runLint(g, ctx = {}) {
   for (const c of pagesOfKind(g, ["adr", "iteration"])) {
     for (const l of c.links) covered.add(l.target);
   }
-  for (const d of pagesOfKind(g, [...DRIVER_KINDS])) {
+  for (const d of pagesOfKind(g, [...DRIVER_KINDS2])) {
     if (!covered.has(d.basename)) {
       findings.push({
         rule: "uncovered-driver",
@@ -9139,6 +9604,81 @@ ${TABLE_HEADER}${row}
 `;
   await repo.write(RISK_FILE, next);
   return { key, created: true, path: RISK_FILE };
+}
+
+// src/application/usecases/UpdateUtilityTree.ts
+var FILE = "utility-tree.md";
+var HEADER2 = "| Driver | Scenario | Priority |\n| --- | --- | --- |\n";
+var SPEC2 = {
+  headerMark: "| Driver |",
+  header: HEADER2,
+  scaffold: "---\ntype: utility-tree\ntags: [utility-tree]\n---\n\n# Utility Tree\n\nQAW output. Maintained by `arch-wiki update-utility-tree` \u2014 one row per\nquality-attribute driver, keyed by id.\n\n" + HEADER2
+};
+function cell2(value) {
+  return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+}
+async function updateUtilityTree(input, deps) {
+  const { repo } = deps;
+  const from = input.from.trim();
+  if (!from) throw new DomainError("update-utility-tree: missing --from", 1);
+  const exists = await repo.exists(FILE);
+  const content = exists ? await repo.read(FILE) : null;
+  const keyLine = `[[${from}]]`;
+  const row = `| [[${from}]] | ${cell2(input.scenario ?? "") || "\u2014"} | ${cell2(input.priority ?? "") || "\u2014"} |`;
+  const r = upsertKeyedRow(content, keyLine, row, SPEC2);
+  if (r.changed) await repo.write(FILE, r.content);
+  return { path: FILE, created: !exists, changed: r.changed };
+}
+
+// src/domain/services/ManagedRegion.ts
+function between(start, end, body) {
+  return body ? `${start}
+${body}
+${end}` : `${start}
+${end}`;
+}
+function anchorIndex(lines) {
+  const h1 = lines.findIndex((l) => /^#\s/.test(l));
+  if (h1 >= 0) return h1 + 1;
+  if (lines[0] === "---") {
+    const close = lines.indexOf("---", 1);
+    if (close >= 0) return close + 1;
+  }
+  return 0;
+}
+function replaceManagedRegion(content, startMark, endMark, body, newFileScaffold) {
+  const region = between(startMark, endMark, body);
+  if (content == null) {
+    const sep2 = newFileScaffold.endsWith("\n") ? "" : "\n";
+    return `${newFileScaffold}${sep2}${region}
+`;
+  }
+  const s = content.indexOf(startMark);
+  const e = content.indexOf(endMark);
+  if (s >= 0 && e >= 0 && e > s) {
+    return `${content.slice(0, s)}${region}${content.slice(e + endMark.length)}`;
+  }
+  const lines = content.split("\n");
+  lines.splice(anchorIndex(lines), 0, "", region, "");
+  const out = lines.join("\n");
+  return out.endsWith("\n") ? out : `${out}
+`;
+}
+
+// src/application/usecases/UpdateGapAnalysis.ts
+var FILE2 = "gap-analysis.md";
+var START = "<!-- arch-wiki:gaps:start -->";
+var END = "<!-- arch-wiki:gaps:end -->";
+var SCAFFOLD2 = "---\ntype: gap-analysis\ntags: [gap-analysis]\n---\n\n# Gap Analysis\n\nOpen gaps below are regenerated by `arch-wiki update-gap-analysis` between the\nmarkers. Notes outside the managed region are preserved.\n\n";
+async function updateGapAnalysis(input, deps) {
+  const { repo } = deps;
+  const sorted = [...input.gaps].sort((a, b) => a.driver.localeCompare(b.driver));
+  const body = sorted.map((g) => `- [[${g.driver}]] \u2014 ${g.reason}`).join("\n");
+  const exists = await repo.exists(FILE2);
+  const content = exists ? await repo.read(FILE2) : null;
+  const next = replaceManagedRegion(content, START, END, body, SCAFFOLD2);
+  await repo.write(FILE2, next);
+  return { path: FILE2, created: !exists, gapCount: sorted.length };
 }
 
 // src/application/usecases/SyncTemplates.ts
@@ -9315,7 +9855,7 @@ function migrationContext(opts) {
   const repo = new FoamWikiRepository(root, fs2);
   const clock = new SystemClock();
   return {
-    abs: (relPath) => path6.join(root, relPath),
+    abs: (relPath) => path8.join(root, relPath),
     fs: fs2,
     // Baseline must be computed with the SAME required-sections the runtime lint
     // uses, or suppression keys won't match (plan §3.7 fix #8).
@@ -9331,15 +9871,18 @@ function sha256(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
 }
 function pluginRoot() {
-  return process.env.ARCH_WIKI_PLUGIN_ROOT ?? path6.resolve(__dirname, "..");
+  return process.env.ARCH_WIKI_PLUGIN_ROOT ?? path8.resolve(__dirname, "..");
 }
 function templatesDir() {
-  return process.env.ARCH_WIKI_TEMPLATES_DIR ?? path6.join(pluginRoot(), "templates");
+  return process.env.ARCH_WIKI_TEMPLATES_DIR ?? path8.join(pluginRoot(), "templates");
+}
+function payloadsDir() {
+  return path8.join(templatesDir(), "payloads");
 }
 function wikiRoot(opts) {
   const cwd = opts.cwd ?? process.cwd();
   const root = opts.root ?? "docs/architecture";
-  return path6.isAbsolute(root) ? root : path6.join(cwd, root);
+  return path8.isAbsolute(root) ? root : path8.join(cwd, root);
 }
 async function loadProjectConfig(opts) {
   const store = new FileProjectConfigStore(wikiRoot(opts), new NodeFileSystem());
@@ -9381,11 +9924,117 @@ async function main() {
       const config = await loadProjectConfig(opts);
       const result = await scaffoldArtifact(
         { spec, title: String(opts.title), slug: opts.slug, drivers, dryRun: !!opts.dryRun },
-        { repo, templates, clock: new SystemClock(), config }
+        { repo, templates, clock: new SystemClock(), config, frontmatter: new GrayMatterParser() }
       );
       emit({ ok: true, command: "scaffold", data: result, warnings: result.warnings });
     } catch (err) {
       fail("scaffold", err);
+    }
+  });
+  cli.command("hypothesis", "scaffold a hypothesis (concept) with traceability + a kanban card").option("--title <title>", "hypothesis title").option("--slug <slug>", "explicit kebab slug (for non-latin titles)").option("--from <path>", "originating raw/<file> back-reference (must exist)").option("--driver-candidate <id>", "forward-ref driver candidate (placeholder)").option("--dry-run", "compute and validate without writing").action(async (opts) => {
+    try {
+      if (!opts.title) throw new DomainError("missing --title", 1);
+      const fs2 = new NodeFileSystem();
+      const repo = new FoamWikiRepository(wikiRoot(opts), fs2);
+      const templates = new PluginTemplateStore(templatesDir(), fs2);
+      const config = await loadProjectConfig(opts);
+      const result = await scaffoldHypothesis(
+        {
+          title: String(opts.title),
+          slug: opts.slug,
+          from: opts.from != null ? String(opts.from) : void 0,
+          driverCandidate: opts["driverCandidate"] != null ? String(opts["driverCandidate"]) : void 0,
+          dryRun: !!opts.dryRun
+        },
+        { repo, templates, clock: new SystemClock(), config, frontmatter: new GrayMatterParser() }
+      );
+      emit({ ok: true, command: "hypothesis", data: result, warnings: result.warnings });
+    } catch (err) {
+      fail("hypothesis", err);
+    }
+  });
+  cli.command("questionnaire <method>", "scaffold a qaw|rozanski|driver-gap questionnaire skeleton").option("--topic <topic>", "questionnaire topic").option("--slug <slug>", "explicit kebab slug (for non-latin topics)").option("--related-drivers <ids>", "comma-separated driver ids this relates to").option("--dry-run", "compute and validate without writing").action(async (method, opts) => {
+    try {
+      if (!opts.topic) throw new DomainError("missing --topic", 1);
+      const fs2 = new NodeFileSystem();
+      const repo = new FoamWikiRepository(wikiRoot(opts), fs2);
+      const payloads = new FilePayloadTemplateStore(payloadsDir(), fs2);
+      const result = await scaffoldQuestionnaire(
+        {
+          method,
+          topic: String(opts.topic),
+          slug: opts.slug,
+          relatedDrivers: opts["relatedDrivers"] ? csv(opts["relatedDrivers"]) : void 0,
+          dryRun: !!opts.dryRun
+        },
+        { repo, payloads, clock: new SystemClock(), frontmatter: new GrayMatterParser() }
+      );
+      emit({ ok: true, command: "questionnaire", data: result, warnings: result.warnings });
+    } catch (err) {
+      fail("questionnaire", err);
+    }
+  });
+  cli.command("render-issue", "render a deterministic issue payload (IntentEnvelope) from a driver/ADR").option("--from <id>", "source artifact id (e.g. QA-007)").option("--kind <kind>", "arch|techdesign").option("--role <role>", "be|fe|do (required for techdesign)").action(async (opts) => {
+    try {
+      if (!opts.from) throw new DomainError("missing --from", 1);
+      if (!opts.kind) throw new DomainError("missing --kind", 1);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const payloads = new FilePayloadTemplateStore(payloadsDir(), fs2);
+      const result = await renderIssuePayload(
+        { from: String(opts.from), kind: opts.kind, role: opts.role },
+        { repo, payloads, config: await loadProjectConfig(opts), ledger: new FileLedgerStore(root, fs2), hash: sha256 }
+      );
+      emit({ ok: true, command: "render-issue", data: result, warnings: result.warnings });
+    } catch (err) {
+      fail("render-issue", err);
+    }
+  });
+  cli.command("record-issue", "record a created issue in the ledger + driver frontmatter (two-way trace)").option("--id <id>", "source artifact id (e.g. QA-007)").option("--key <key>", "external issue key (e.g. GRM-431)").option("--kind <kind>", "arch|techdesign").option("--role <role>", "be|fe|do (required for techdesign)").option("--hash <hash>", "content hash from render-issue").option("--system <system>", "external system (default jira)").action(async (opts) => {
+    try {
+      if (!opts.id) throw new DomainError("missing --id", 1);
+      if (!opts.key) throw new DomainError("missing --key", 1);
+      if (!opts.kind) throw new DomainError("missing --kind", 1);
+      if (!opts.hash) throw new DomainError("missing --hash", 1);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const result = await recordIssue(
+        {
+          id: String(opts.id),
+          key: String(opts.key),
+          kind: opts.kind,
+          role: opts.role,
+          hash: String(opts.hash),
+          system: opts.system != null ? String(opts.system) : void 0
+        },
+        { repo, ledger: new FileLedgerStore(root, fs2), frontmatter: new GrayMatterParser(), clock: new SystemClock() }
+      );
+      emit({ ok: true, command: "record-issue", data: result });
+    } catch (err) {
+      fail("record-issue", err);
+    }
+  });
+  cli.command("ingest-questionnaire", "parse an answered questionnaire into a traceability report").option("--from <path>", "raw/questionnaires/<file> to parse").action(async (opts) => {
+    try {
+      if (!opts.from) throw new DomainError("missing --from", 1);
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await parseQuestionnaire({ from: String(opts.from) }, { repo });
+      emit({ ok: true, command: "ingest-questionnaire", data: result });
+    } catch (err) {
+      fail("ingest-questionnaire", err);
+    }
+  });
+  cli.command("trace <id>", "walk raw \u2192 driver \u2192 ADR \u2192 issue \u2192 showcase for an artifact").action(async (id, opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const result = await trace(id, { repo, ledger: new FileLedgerStore(root, fs2) });
+      emit({ ok: true, command: "trace", data: result });
+    } catch (err) {
+      fail("trace", err);
     }
   });
   cli.command("guard-path", "PreToolUse hook: block writes to raw/ and .likec4 snapshots").option("--stdin", "read the hook payload from stdin").action(async () => {
@@ -9528,6 +10177,47 @@ async function main() {
       emit({ ok: true, command: "record-risk", data: result });
     } catch (err) {
       fail("record-risk", err);
+    }
+  });
+  cli.command("update-kanban", "idempotently add/move a card in kanban.md (intent source-of-truth)").option("--add <id>", "card id/basename to add (rendered as a wikilink)").option("--column <col>", "backlog|in-progress|done (default backlog on a new card)").action(async (opts) => {
+    try {
+      if (!opts.add) throw new DomainError("missing --add", 1);
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await updateKanban(
+        { add: String(opts.add), column: opts.column },
+        { repo }
+      );
+      emit({ ok: true, command: "update-kanban", data: result });
+    } catch (err) {
+      fail("update-kanban", err);
+    }
+  });
+  cli.command("update-utility-tree", "idempotently upsert a QAW row into utility-tree.md").option("--from <id>", "quality-attribute driver id (keyed; placeholder if absent)").option("--scenario <text>", "quality scenario one-liner").option("--priority <text>", "priority marker (e.g. H/M/L)").action(async (opts) => {
+    try {
+      if (!opts.from) throw new DomainError("missing --from", 1);
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await updateUtilityTree(
+        {
+          from: String(opts.from),
+          scenario: opts.scenario != null ? String(opts.scenario) : void 0,
+          priority: opts.priority != null ? String(opts.priority) : void 0
+        },
+        { repo }
+      );
+      emit({ ok: true, command: "update-utility-tree", data: result });
+    } catch (err) {
+      fail("update-utility-tree", err);
+    }
+  });
+  cli.command("update-gap-analysis", "regenerate the open-gaps region of gap-analysis.md from lint").action(async (opts) => {
+    try {
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
+      const gaps = report.findings.filter((f) => f.rule === "uncovered-driver" && f.file).map((f) => ({ driver: f.file.replace(/^.*\//, "").replace(/\.md$/, ""), reason: f.message }));
+      const result = await updateGapAnalysis({ gaps }, { repo });
+      emit({ ok: true, command: "update-gap-analysis", data: result });
+    } catch (err) {
+      fail("update-gap-analysis", err);
     }
   });
   cli.command("sync-templates", "sync plugin templates into target .foam/templates (non-destructive)").option("--check", "report drift only (default; exits 2 on missing/stale)").option("--force", "create missing and update stale templates (curated files preserved)").option("--dry-run", "preview without writing or failing").action(async (opts) => {

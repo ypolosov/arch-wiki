@@ -1,5 +1,6 @@
 import { ArtifactSpec } from '../../domain/model/ArtifactType';
 import { WikiPage } from '../../domain/model/WikiPage';
+import { ParsedDoc } from './FrontmatterParserPort';
 
 /**
  * Driven port over a target's `docs/architecture/` wiki. All paths are relative
@@ -19,6 +20,8 @@ export interface WikiRepositoryPort {
   exists(relPath: string): Promise<boolean>;
   write(relPath: string, content: string): Promise<void>;
   read(relPath: string): Promise<string>;
+  /** Read a file and split it into {frontmatter, content} (incl. raw/ paths). */
+  readParsed(relPath: string): Promise<ParsedDoc>;
   /**
    * Append a wikilink bullet to a hub file. Idempotent (skips if `basename` is
    * already linked). Returns false if the hub file does not exist.

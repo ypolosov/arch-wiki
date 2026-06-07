@@ -4,14 +4,26 @@ import { cac } from 'cac';
 import { NodeFileSystem } from '../adapters/fs/NodeFileSystem';
 import { SystemClock } from '../adapters/clock/SystemClock';
 import { PluginTemplateStore } from '../adapters/template/PluginTemplateStore';
+import { FilePayloadTemplateStore } from '../adapters/template/FilePayloadTemplateStore';
 import { FoamWikiRepository } from '../adapters/repo/FoamWikiRepository';
 import { FileVersionStore } from '../adapters/version/FileVersionStore';
 import { FileProjectConfigStore } from '../adapters/config/FileProjectConfigStore';
+import { FileLedgerStore } from '../adapters/ledger/FileLedgerStore';
+import { GrayMatterParser } from '../adapters/frontmatter/GrayMatterParser';
 import { ProjectConfig } from '../domain/services/ProjectConfig';
 import { allocateNextId } from '../application/usecases/AllocateNextId';
 import { scaffoldArtifact } from '../application/usecases/ScaffoldArtifact';
+import { scaffoldHypothesis } from '../application/usecases/ScaffoldHypothesis';
+import { scaffoldQuestionnaire, QuestionnaireMethod } from '../application/usecases/ScaffoldQuestionnaire';
+import { parseQuestionnaire } from '../application/usecases/ParseQuestionnaire';
+import { renderIssuePayload, IssueKind, IssueRole } from '../application/usecases/RenderIssuePayload';
+import { recordIssue } from '../application/usecases/RecordIssue';
+import { trace } from '../application/usecases/Trace';
 import { lintWiki } from '../application/usecases/LintWiki';
 import { recordRisk } from '../application/usecases/RecordRisk';
+import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
+import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
+import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
 import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
 import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
@@ -97,6 +109,10 @@ function templatesDir(): string {
   return process.env.ARCH_WIKI_TEMPLATES_DIR ?? path.join(pluginRoot(), 'templates');
 }
 
+function payloadsDir(): string {
+  return path.join(templatesDir(), 'payloads');
+}
+
 function wikiRoot(opts: GlobalOpts): string {
   const cwd = opts.cwd ?? process.cwd();
   const root = opts.root ?? 'docs/architecture';
@@ -160,11 +176,154 @@ async function main(): Promise<void> {
         const config = await loadProjectConfig(opts);
         const result = await scaffoldArtifact(
           { spec, title: String(opts.title), slug: opts.slug as string | undefined, drivers, dryRun: !!opts.dryRun },
-          { repo, templates, clock: new SystemClock(), config },
+          { repo, templates, clock: new SystemClock(), config, frontmatter: new GrayMatterParser() },
         );
         emit({ ok: true, command: 'scaffold', data: result, warnings: result.warnings });
       } catch (err) {
         fail('scaffold', err);
+      }
+    });
+
+  cli
+    .command('hypothesis', 'scaffold a hypothesis (concept) with traceability + a kanban card')
+    .option('--title <title>', 'hypothesis title')
+    .option('--slug <slug>', 'explicit kebab slug (for non-latin titles)')
+    .option('--from <path>', 'originating raw/<file> back-reference (must exist)')
+    .option('--driver-candidate <id>', 'forward-ref driver candidate (placeholder)')
+    .option('--dry-run', 'compute and validate without writing')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.title) throw new DomainError('missing --title', 1);
+        const fs = new NodeFileSystem();
+        const repo = new FoamWikiRepository(wikiRoot(opts), fs);
+        const templates = new PluginTemplateStore(templatesDir(), fs);
+        const config = await loadProjectConfig(opts);
+        const result = await scaffoldHypothesis(
+          {
+            title: String(opts.title),
+            slug: opts.slug as string | undefined,
+            from: opts.from != null ? String(opts.from) : undefined,
+            driverCandidate: opts['driverCandidate'] != null ? String(opts['driverCandidate']) : undefined,
+            dryRun: !!opts.dryRun,
+          },
+          { repo, templates, clock: new SystemClock(), config, frontmatter: new GrayMatterParser() },
+        );
+        emit({ ok: true, command: 'hypothesis', data: result, warnings: result.warnings });
+      } catch (err) {
+        fail('hypothesis', err);
+      }
+    });
+
+  cli
+    .command('questionnaire <method>', 'scaffold a qaw|rozanski|driver-gap questionnaire skeleton')
+    .option('--topic <topic>', 'questionnaire topic')
+    .option('--slug <slug>', 'explicit kebab slug (for non-latin topics)')
+    .option('--related-drivers <ids>', 'comma-separated driver ids this relates to')
+    .option('--dry-run', 'compute and validate without writing')
+    .action(async (method: string, opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.topic) throw new DomainError('missing --topic', 1);
+        const fs = new NodeFileSystem();
+        const repo = new FoamWikiRepository(wikiRoot(opts), fs);
+        const payloads = new FilePayloadTemplateStore(payloadsDir(), fs);
+        const result = await scaffoldQuestionnaire(
+          {
+            method: method as QuestionnaireMethod,
+            topic: String(opts.topic),
+            slug: opts.slug as string | undefined,
+            relatedDrivers: opts['relatedDrivers'] ? csv(opts['relatedDrivers']) : undefined,
+            dryRun: !!opts.dryRun,
+          },
+          { repo, payloads, clock: new SystemClock(), frontmatter: new GrayMatterParser() },
+        );
+        emit({ ok: true, command: 'questionnaire', data: result, warnings: result.warnings });
+      } catch (err) {
+        fail('questionnaire', err);
+      }
+    });
+
+  cli
+    .command('render-issue', 'render a deterministic issue payload (IntentEnvelope) from a driver/ADR')
+    .option('--from <id>', 'source artifact id (e.g. QA-007)')
+    .option('--kind <kind>', 'arch|techdesign')
+    .option('--role <role>', 'be|fe|do (required for techdesign)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.from) throw new DomainError('missing --from', 1);
+        if (!opts.kind) throw new DomainError('missing --kind', 1);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const payloads = new FilePayloadTemplateStore(payloadsDir(), fs);
+        const result = await renderIssuePayload(
+          { from: String(opts.from), kind: opts.kind as IssueKind, role: opts.role as IssueRole | undefined },
+          { repo, payloads, config: await loadProjectConfig(opts), ledger: new FileLedgerStore(root, fs), hash: sha256 },
+        );
+        emit({ ok: true, command: 'render-issue', data: result, warnings: result.warnings });
+      } catch (err) {
+        fail('render-issue', err);
+      }
+    });
+
+  cli
+    .command('record-issue', 'record a created issue in the ledger + driver frontmatter (two-way trace)')
+    .option('--id <id>', 'source artifact id (e.g. QA-007)')
+    .option('--key <key>', 'external issue key (e.g. GRM-431)')
+    .option('--kind <kind>', 'arch|techdesign')
+    .option('--role <role>', 'be|fe|do (required for techdesign)')
+    .option('--hash <hash>', 'content hash from render-issue')
+    .option('--system <system>', 'external system (default jira)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.id) throw new DomainError('missing --id', 1);
+        if (!opts.key) throw new DomainError('missing --key', 1);
+        if (!opts.kind) throw new DomainError('missing --kind', 1);
+        if (!opts.hash) throw new DomainError('missing --hash', 1);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const result = await recordIssue(
+          {
+            id: String(opts.id),
+            key: String(opts.key),
+            kind: opts.kind as IssueKind,
+            role: opts.role as IssueRole | undefined,
+            hash: String(opts.hash),
+            system: opts.system != null ? String(opts.system) : undefined,
+          },
+          { repo, ledger: new FileLedgerStore(root, fs), frontmatter: new GrayMatterParser(), clock: new SystemClock() },
+        );
+        emit({ ok: true, command: 'record-issue', data: result });
+      } catch (err) {
+        fail('record-issue', err);
+      }
+    });
+
+  cli
+    .command('ingest-questionnaire', 'parse an answered questionnaire into a traceability report')
+    .option('--from <path>', 'raw/questionnaires/<file> to parse')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.from) throw new DomainError('missing --from', 1);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await parseQuestionnaire({ from: String(opts.from) }, { repo });
+        emit({ ok: true, command: 'ingest-questionnaire', data: result });
+      } catch (err) {
+        fail('ingest-questionnaire', err);
+      }
+    });
+
+  cli
+    .command('trace <id>', 'walk raw → driver → ADR → issue → showcase for an artifact')
+    .action(async (id: string, opts: GlobalOpts) => {
+      try {
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const result = await trace(id, { repo, ledger: new FileLedgerStore(root, fs) });
+        emit({ ok: true, command: 'trace', data: result });
+      } catch (err) {
+        fail('trace', err);
       }
     });
 
@@ -343,6 +502,63 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'record-risk', data: result });
       } catch (err) {
         fail('record-risk', err);
+      }
+    });
+
+  cli
+    .command('update-kanban', 'idempotently add/move a card in kanban.md (intent source-of-truth)')
+    .option('--add <id>', 'card id/basename to add (rendered as a wikilink)')
+    .option('--column <col>', 'backlog|in-progress|done (default backlog on a new card)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.add) throw new DomainError('missing --add', 1);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await updateKanban(
+          { add: String(opts.add), column: opts.column as KanbanColumn | undefined },
+          { repo },
+        );
+        emit({ ok: true, command: 'update-kanban', data: result });
+      } catch (err) {
+        fail('update-kanban', err);
+      }
+    });
+
+  cli
+    .command('update-utility-tree', 'idempotently upsert a QAW row into utility-tree.md')
+    .option('--from <id>', 'quality-attribute driver id (keyed; placeholder if absent)')
+    .option('--scenario <text>', 'quality scenario one-liner')
+    .option('--priority <text>', 'priority marker (e.g. H/M/L)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.from) throw new DomainError('missing --from', 1);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await updateUtilityTree(
+          {
+            from: String(opts.from),
+            scenario: opts.scenario != null ? String(opts.scenario) : undefined,
+            priority: opts.priority != null ? String(opts.priority) : undefined,
+          },
+          { repo },
+        );
+        emit({ ok: true, command: 'update-utility-tree', data: result });
+      } catch (err) {
+        fail('update-utility-tree', err);
+      }
+    });
+
+  cli
+    .command('update-gap-analysis', 'regenerate the open-gaps region of gap-analysis.md from lint')
+    .action(async (opts: GlobalOpts) => {
+      try {
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
+        const gaps = report.findings
+          .filter((f) => f.rule === 'uncovered-driver' && f.file)
+          .map((f) => ({ driver: f.file!.replace(/^.*\//, '').replace(/\.md$/, ''), reason: f.message }));
+        const result = await updateGapAnalysis({ gaps }, { repo });
+        emit({ ok: true, command: 'update-gap-analysis', data: result });
+      } catch (err) {
+        fail('update-gap-analysis', err);
       }
     });
 

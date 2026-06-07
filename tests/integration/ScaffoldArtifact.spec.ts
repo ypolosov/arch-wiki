@@ -5,6 +5,7 @@ import { scaffoldArtifact } from '../../src/application/usecases/ScaffoldArtifac
 import { NodeFileSystem } from '../../src/adapters/fs/NodeFileSystem';
 import { FoamWikiRepository } from '../../src/adapters/repo/FoamWikiRepository';
 import { PluginTemplateStore } from '../../src/adapters/template/PluginTemplateStore';
+import { GrayMatterParser } from '../../src/adapters/frontmatter/GrayMatterParser';
 import { ARTIFACT_SPECS } from '../../src/domain/model/ArtifactType';
 import { ProjectConfig } from '../../src/domain/services/ProjectConfig';
 
@@ -24,6 +25,7 @@ function deps(root: string) {
     templates: new PluginTemplateStore(TEMPLATES, sys),
     clock,
     config: ProjectConfig.from(null),
+    frontmatter: new GrayMatterParser(),
   };
 }
 
@@ -93,5 +95,67 @@ describe('scaffoldArtifact (integration)', () => {
     );
     expect(r.created).toBe(false);
     expect(await d.sys.exists(path.join(root, r.path))).toBe(false);
+  });
+
+  it('injects typed frontmatter over the template YAML (§4.0)', async () => {
+    const root = await tmpRoot();
+    const d = deps(root);
+    const r = await scaffoldArtifact(
+      {
+        spec: ARTIFACT_SPECS['concept'],
+        title: 'Edge Caching',
+        frontmatter: { status: 'hypothesis', source: 'raw/notes.md', realizes_driver: ['QA-007'] },
+      },
+      d,
+    );
+    const content = await fs.readFile(path.join(root, r.path), 'utf8');
+    expect(content).toContain('status: hypothesis');
+    expect(content).toContain('source: raw/notes.md');
+    expect(content).toContain('realizes_driver:');
+    expect(content).toContain('QA-007');
+    expect(content).toContain('type: concept'); // template field preserved
+    expect(content).toContain('# Edge Caching'); // body intact
+  });
+
+  it('input frontmatter overrides a template field; key order is stable', async () => {
+    const root = await tmpRoot();
+    const d = deps(root);
+    const r = await scaffoldArtifact(
+      { spec: ARTIFACT_SPECS['adr'], title: 'Override', frontmatter: { status: 'accepted' } },
+      d,
+    );
+    const content = await fs.readFile(path.join(root, r.path), 'utf8');
+    // adr template ships `status: proposed`; input wins.
+    expect(content).toContain('status: accepted');
+    expect(content).not.toContain('status: proposed');
+    // Sorted keys: status before tags before type.
+    const fmIdx = (k: string) => content.indexOf(k);
+    expect(fmIdx('status:')).toBeLessThan(fmIdx('type:'));
+  });
+
+  it('slugPrefix forces a prefixed filename stem', async () => {
+    const root = await tmpRoot();
+    const d = deps(root);
+    const r = await scaffoldArtifact(
+      { spec: ARTIFACT_SPECS['concept'], title: 'Edge Caching', slugPrefix: 'hypothesis' },
+      d,
+    );
+    expect(r.path).toBe('concepts/hypothesis-edge-caching.md');
+  });
+
+  it('empty frontmatter leaves the page byte-identical to a plain scaffold', async () => {
+    const rootA = await tmpRoot();
+    const rootB = await tmpRoot();
+    const a = await scaffoldArtifact(
+      { spec: ARTIFACT_SPECS['adr'], title: 'Same' },
+      deps(rootA),
+    );
+    const b = await scaffoldArtifact(
+      { spec: ARTIFACT_SPECS['adr'], title: 'Same', frontmatter: {} },
+      deps(rootB),
+    );
+    const ca = await fs.readFile(path.join(rootA, a.path), 'utf8');
+    const cb = await fs.readFile(path.join(rootB, b.path), 'utf8');
+    expect(cb).toBe(ca);
   });
 });

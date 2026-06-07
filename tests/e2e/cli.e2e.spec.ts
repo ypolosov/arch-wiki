@@ -144,6 +144,67 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(JSON.parse(stderr.trim()).ok).toBe(false);
   });
 
+  it('process chain: hypothesis (+kanban, not orphan) → questionnaire → trace', async () => {
+    const hyp = run(['hypothesis', '--title', 'Edge Caching', '--cwd', root], root);
+    expect(hyp.ok).toBe(true);
+    expect(hyp.data.path).toBe('concepts/hypothesis-edge-caching.md');
+    expect(hyp.data.kanbanCard).toBe('hypothesis-edge-caching');
+
+    const wiki = path.join(root, 'docs/architecture');
+    const kanban = await fs.readFile(path.join(wiki, 'kanban.md'), 'utf8');
+    expect(kanban).toContain('[[hypothesis-edge-caching]]');
+
+    // The hypothesis is not an orphan (kanban card supplies inbound link).
+    let lintOut = '';
+    try {
+      lintOut = execFileSync('node', [CLI, 'lint', '--json', '--cwd', root], { cwd: root, encoding: 'utf8' });
+    } catch (e: unknown) {
+      lintOut = (e as { stdout: string }).stdout;
+    }
+    const lint = JSON.parse(lintOut.trim().split('\n').pop()!) as Envelope;
+    const orphans = (lint.data.findings as Array<{ rule: string; file?: string }>).filter(
+      (f) => f.rule === 'orphan' && f.file === 'concepts/hypothesis-edge-caching.md',
+    );
+    expect(orphans).toHaveLength(0);
+
+    const q = run(['questionnaire', 'qaw', '--topic', 'Checkout', '--cwd', root], root);
+    expect(q.ok).toBe(true);
+    expect(q.data.path).toBe('raw/questionnaires/qaw-2026-06-07-checkout.md');
+  });
+
+  it('render-issue + record-issue + trace with a tasks profile', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, '.arch-wiki/config.json'),
+      JSON.stringify({ tasks: { language: 'ru', prefixes: { arch: '[Arch]', techdesign: '[Techdesign]' } } }),
+    );
+    await fs.mkdir(path.join(wiki, 'drivers/quality-attributes'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\n---\n# QA-001: Latency\n',
+    );
+
+    const env = run(['render-issue', '--from', 'QA-001', '--kind', 'arch', '--cwd', root], root);
+    expect(env.ok).toBe(true);
+    expect(env.data.issueTitle).toBe('[Arch] Latency');
+    expect(env.data.alreadyCreated).toBe(false);
+    const hash = env.data.contentHash as string;
+
+    const rec = run(
+      ['record-issue', '--id', 'QA-001', '--key', 'GRM-431', '--kind', 'arch', '--hash', hash, '--cwd', root],
+      root,
+    );
+    expect((rec.data as { ledgerAppended: boolean }).ledgerAppended).toBe(true);
+
+    const again = run(['render-issue', '--from', 'QA-001', '--kind', 'arch', '--cwd', root], root);
+    expect(again.data.alreadyCreated).toBe(true);
+    expect(again.data.drifted).toBe(false);
+
+    const tr = run(['trace', 'QA-001', '--cwd', root], root);
+    expect((tr.data.issues as Array<{ key: string }>)[0]!.key).toBe('GRM-431');
+  });
+
   it('fails with a JSON error and non-zero exit on unknown type', () => {
     let exitCode = 0;
     let stderr = '';

@@ -125,6 +125,11 @@ export class FoamWikiRepository implements WikiRepositoryPort {
     return this.fs.readFile(this.abs(relPath));
   }
 
+  async readParsed(relPath: string): Promise<{ frontmatter: Record<string, unknown>; content: string }> {
+    const parsed = matter(await this.fs.readFile(this.abs(relPath)));
+    return { frontmatter: (parsed.data ?? {}) as Record<string, unknown>, content: parsed.content };
+  }
+
   async appendHubLink(hubRelPath: string, basename: string, bullet: string): Promise<boolean> {
     const abs = this.abs(hubRelPath);
     if (!(await this.fs.exists(abs))) return false;

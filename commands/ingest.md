@@ -21,3 +21,17 @@ Source argument: `$ARGUMENTS`
 4. Summarize for the curator: pages created/updated, new links, and any
    contradictions or open questions that need a human decision. Do not invent
    ADR decisions — propose them as `proposed` status for review.
+
+## Ingesting an answered questionnaire
+
+If `$ARGUMENTS` points at `raw/questionnaires/<file>` (an answered questionnaire):
+
+1. Run `arch-wiki ingest-questionnaire --from raw/questionnaires/<file>`. The
+   deterministic CLI returns `{method, related_drivers, answers, unanswered,
+   contradictions}` — answers attributed to drivers via explicit `closes: <id>` tags.
+2. For drivers in `unanswered`, judge (semantically) whether any untagged answer
+   actually closes them; for genuine closures, scaffold/update the driver via
+   `arch-wiki scaffold …` (topological order, parents first).
+3. For each `contradictions` row, run `arch-wiki record-risk --source ingest
+   --id <id> --conflict "<…>"` (idempotent).
+4. Finish with `arch-wiki validate-graph` (exit 2 forces you to fix links first).

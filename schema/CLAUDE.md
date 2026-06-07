@@ -95,6 +95,27 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
    silently overwrite recorded decisions.
 6. Each page touched gets/refreshes a **Sources** section pointing back to the raw file.
 
+### Design process: `hypothesis` → `questionnaire` → `ingest` → `render-issue` → `trace`
+- **`/arch-wiki:hypothesis <title> [from raw/<file>]`** — scaffold a `concept`
+  hypothesis with traceability frontmatter (`status: hypothesis`, `source`,
+  `realizes_driver`) and an auto kanban card (so it is not an orphan).
+- **`/arch-wiki:questionnaire <qaw|rozanski|driver-gap> <topic>`** — scaffold a
+  questionnaire skeleton into `raw/questionnaires/`; the CLI is the authorized
+  author of that raw file (do not Edit/Write `raw/` by hand). Answers come back in
+  the same file (`status: answered`, tag answers `closes: <id>`).
+- **`/arch-wiki:ingest raw/questionnaires/<file>`** → `arch-wiki ingest-questionnaire`
+  returns a traceability report (answers→drivers, unanswered, contradictions).
+- **`render-issue`** — the SA chooses what to turn into a `[Arch]`/`[Techdesign]`
+  issue (from `kanban.md`); never auto-create from gaps. Human-gated, idempotent on
+  `(sourceId, kind, role)`; records the trace via `record-issue`.
+- **`/arch-wiki:trace <ID>`** — walk raw → driver → ADR → issue → showcase.
+
+These three files are the **source of truth** (Confluence is a read-only projection),
+each updated only via the CLI — never edited by hand:
+- `utility-tree.md` = QAW output (`arch-wiki update-utility-tree`).
+- `gap-analysis.md` = derived from lint (`arch-wiki update-gap-analysis`).
+- `kanban.md` = backlog/intent (`arch-wiki update-kanban`; moves need explicit `--column`).
+
 ### `/arch-wiki:query <question>`
 1. Answer from the **synthesized wiki**, not by re-reading `raw/`.
 2. Cite the wiki pages used (as wikilinks).
