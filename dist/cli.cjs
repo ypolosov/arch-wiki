@@ -9939,7 +9939,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.2.3";
+var PLUGIN_VERSION = "0.4.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
