@@ -6,6 +6,8 @@ import { SystemClock } from '../adapters/clock/SystemClock';
 import { PluginTemplateStore } from '../adapters/template/PluginTemplateStore';
 import { FoamWikiRepository } from '../adapters/repo/FoamWikiRepository';
 import { FileVersionStore } from '../adapters/version/FileVersionStore';
+import { FileProjectConfigStore } from '../adapters/config/FileProjectConfigStore';
+import { ProjectConfig } from '../domain/services/ProjectConfig';
 import { allocateNextId } from '../application/usecases/AllocateNextId';
 import { scaffoldArtifact } from '../application/usecases/ScaffoldArtifact';
 import { lintWiki } from '../application/usecases/LintWiki';
@@ -14,7 +16,7 @@ import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
 import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
 import { MigrationContext } from '../migrations/types';
-import { resolveKind } from '../domain/model/ArtifactType';
+import { resolveKind, ARTIFACT_SPECS, ArtifactKind } from '../domain/model/ArtifactType';
 import { kindOfPage } from '../domain/model/WikiPage';
 import { Severity } from '../domain/services/LintRuleSet';
 import { isProtectedWritePath } from '../domain/services/PathUtil';
@@ -99,6 +101,12 @@ function wikiRoot(opts: GlobalOpts): string {
   return path.isAbsolute(root) ? root : path.join(cwd, root);
 }
 
+/** Composition: load the target's project profile (throws exit 2 if malformed/invalid). */
+async function loadProjectConfig(opts: GlobalOpts): Promise<ProjectConfig> {
+  const store = new FileProjectConfigStore(wikiRoot(opts), new NodeFileSystem());
+  return ProjectConfig.from(await store.read());
+}
+
 function emit(env: Envelope): void {
   process.stdout.write(`${JSON.stringify(env)}\n`);
 }
@@ -147,9 +155,10 @@ async function main(): Promise<void> {
               .map((s) => s.trim())
               .filter(Boolean)
           : [];
+        const config = await loadProjectConfig(opts);
         const result = await scaffoldArtifact(
           { spec, title: String(opts.title), slug: opts.slug as string | undefined, drivers, dryRun: !!opts.dryRun },
-          { repo, templates, clock: new SystemClock() },
+          { repo, templates, clock: new SystemClock(), config },
         );
         emit({ ok: true, command: 'scaffold', data: result, warnings: result.warnings });
       } catch (err) {
@@ -195,12 +204,19 @@ async function main(): Promise<void> {
       process.exit(0);
     });
 
-  cli.command('doctor', 'environment preflight').action(async () => {
+  cli.command('doctor', 'environment preflight').action(async (opts: GlobalOpts) => {
     try {
       const fs = new NodeFileSystem();
       const tdir = templatesDir();
+      let config: { present: boolean; valid: boolean; error?: string };
+      try {
+        const file = await new FileProjectConfigStore(wikiRoot(opts), fs).read();
+        config = { present: file !== null, valid: true };
+      } catch (e) {
+        config = { present: true, valid: false, error: e instanceof Error ? e.message : String(e) };
+      }
       emit({
-        ok: true,
+        ok: config.valid,
         command: 'doctor',
         data: {
           node: process.version,
@@ -208,12 +224,41 @@ async function main(): Promise<void> {
           pluginRoot: pluginRoot(),
           templatesDir: tdir,
           templatesPresent: await fs.exists(tdir),
+          config,
         },
       });
     } catch (err) {
       fail('doctor', err);
     }
   });
+
+  cli
+    .command('config', 'load + validate the project profile (.arch-wiki/config.json)')
+    .option('--check', 'validate only (default); exit 2 on invalid')
+    .option('--show', 'show per-kind effective resolution (override vs default)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const store = new FileProjectConfigStore(wikiRoot(opts), new NodeFileSystem());
+        const file = await store.read(); // throws exit 2 on malformed/invalid
+        const cfg = ProjectConfig.from(file);
+        if (opts.show) {
+          const resolved = (Object.keys(ARTIFACT_SPECS) as ArtifactKind[]).map((kind) => ({
+            kind,
+            hubFile: cfg.hubFile(kind),
+            requiredSections: cfg.requiredSections(kind),
+          }));
+          emit({
+            ok: true,
+            command: 'config',
+            data: { present: file !== null, resolved, notifications: cfg.notificationTarget() },
+          });
+        } else {
+          emit({ ok: true, command: 'config', data: { present: file !== null, valid: true, profile: file } });
+        }
+      } catch (err) {
+        fail('config', err);
+      }
+    });
 
   cli
     .command('lint', 'audit graph integrity with deterministic rules')

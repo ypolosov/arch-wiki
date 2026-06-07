@@ -121,6 +121,29 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(content).toContain('clash');
   });
 
+  it('config: ok on a wiki with no profile; exit 2 on an invalid profile', async () => {
+    const env = run(['config', '--cwd', root], root);
+    expect(env.ok).toBe(true);
+    expect((env.data as { present: boolean }).present).toBe(false);
+
+    await fs.mkdir(path.join(root, 'docs/architecture/.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, 'docs/architecture/.arch-wiki/config.json'),
+      JSON.stringify({ bogus: 1 }), // strict schema → unknown key
+    );
+    let exitCode = 0;
+    let stderr = '';
+    try {
+      execFileSync('node', [CLI, 'config', '--cwd', root], { cwd: root, encoding: 'utf8' });
+    } catch (e: unknown) {
+      const err = e as { status: number; stderr: string };
+      exitCode = err.status;
+      stderr = err.stderr;
+    }
+    expect(exitCode).toBe(2);
+    expect(JSON.parse(stderr.trim()).ok).toBe(false);
+  });
+
   it('fails with a JSON error and non-zero exit on unknown type', () => {
     let exitCode = 0;
     let stderr = '';

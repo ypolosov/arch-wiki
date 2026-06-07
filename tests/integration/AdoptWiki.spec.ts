@@ -43,11 +43,11 @@ describe('adopt / migrate (integration)', () => {
     const result = await applyMigration(store, ctxFor(root), { pluginVersion: '0.2.0' });
 
     expect(result.from).toBe(0);
-    expect(result.to).toBe(1);
-    expect(result.applied.map((a) => a.to)).toEqual([1]);
+    expect(result.to).toBe(2);
+    expect(result.applied.map((a) => a.to)).toEqual([1, 2]);
 
     const marker = await store.read();
-    expect(marker?.schemaVersion).toBe(1);
+    expect(marker?.schemaVersion).toBe(2);
     expect(marker?.pluginVersion).toBe('0.2.0');
 
     const snapshot = JSON.parse(
@@ -64,7 +64,12 @@ describe('adopt / migrate (integration)', () => {
     const after = await new NodeFileSystem().walk(root);
     const added = after.filter((f) => !before.includes(f)).map((f) => path.relative(root, f));
     expect(added.sort()).toEqual(
-      ['.arch-wiki/lint-baseline.json', '.arch-wiki/template-snapshot.json', '.arch-wiki/version.json'].sort(),
+      [
+        '.arch-wiki/config.json',
+        '.arch-wiki/lint-baseline.json',
+        '.arch-wiki/template-snapshot.json',
+        '.arch-wiki/version.json',
+      ].sort(),
     );
   });
 
@@ -73,7 +78,7 @@ describe('adopt / migrate (integration)', () => {
     const store = new FileVersionStore(root, new NodeFileSystem());
     await applyMigration(store, ctxFor(root), { pluginVersion: '0.2.0' });
     const second = await applyMigration(store, ctxFor(root), { pluginVersion: '0.2.0' });
-    expect(second.from).toBe(1);
+    expect(second.from).toBe(2);
     expect(second.applied).toEqual([]);
   });
 });

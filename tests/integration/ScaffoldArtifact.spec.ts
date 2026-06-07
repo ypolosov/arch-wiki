@@ -6,6 +6,7 @@ import { NodeFileSystem } from '../../src/adapters/fs/NodeFileSystem';
 import { FoamWikiRepository } from '../../src/adapters/repo/FoamWikiRepository';
 import { PluginTemplateStore } from '../../src/adapters/template/PluginTemplateStore';
 import { ARTIFACT_SPECS } from '../../src/domain/model/ArtifactType';
+import { ProjectConfig } from '../../src/domain/services/ProjectConfig';
 
 const TEMPLATES = path.resolve(__dirname, '../../templates');
 const clock = { now: () => new Date('2026-06-07T00:00:00Z') };
@@ -22,6 +23,7 @@ function deps(root: string) {
     repo: new FoamWikiRepository(root, sys),
     templates: new PluginTemplateStore(TEMPLATES, sys),
     clock,
+    config: ProjectConfig.from(null),
   };
 }
 

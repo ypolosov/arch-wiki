@@ -7,6 +7,7 @@ import { render } from '../../domain/services/TemplateEngine';
 import { ClockPort } from '../ports/ClockPort';
 import { TemplatePort } from '../ports/TemplatePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
+import { ProjectConfig } from '../../domain/services/ProjectConfig';
 
 export interface ScaffoldInput {
   spec: ArtifactSpec;
@@ -20,6 +21,7 @@ export interface ScaffoldDeps {
   repo: WikiRepositoryPort;
   templates: TemplatePort;
   clock: ClockPort;
+  config: ProjectConfig;
 }
 
 export interface ScaffoldResult {
@@ -46,7 +48,7 @@ export async function scaffoldArtifact(
   deps: ScaffoldDeps,
 ): Promise<ScaffoldResult> {
   const { spec } = input;
-  const { repo, templates, clock } = deps;
+  const { repo, templates, clock, config } = deps;
   const warnings: string[] = [];
 
   // ITER files carry no slug; everything else needs one.
@@ -108,11 +110,12 @@ export async function scaffoldArtifact(
   await repo.write(relPath, output);
 
   let hubUpdated = false;
-  if (spec.hubFile) {
+  const hub = config.hubFile(spec.kind);
+  if (hub) {
     const base = filename.replace(/\.md$/, '');
     const label = id ? `${id.toString()} · ${input.title}` : input.title;
-    hubUpdated = await repo.appendHubLink(spec.hubFile, base, `- [[${base}|${label}]]`);
-    if (!hubUpdated) warnings.push(`hub not found, skipped backlink: ${spec.hubFile}`);
+    hubUpdated = await repo.appendHubLink(hub, base, `- [[${base}|${label}]]`);
+    if (!hubUpdated) warnings.push(`hub not found, skipped backlink: ${hub}`);
   }
 
   return {
