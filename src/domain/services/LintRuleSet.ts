@@ -1,11 +1,16 @@
+import { ArtifactKind } from '../model/ArtifactType';
+import { RequiredSection } from '../model/ProjectConfigSchema';
 import { GraphSnapshot, inboundCounts, pagesOfKind } from '../model/Graph';
-import { kindOfPage } from '../model/WikiPage';
+import { kindOfPage, kindOfRelPath } from '../model/WikiPage';
 import { levenshtein } from './Levenshtein';
+import { normalizeSection } from './WikilinkScanner';
 import { posixResolve } from './PathUtil';
 
 export interface LintContext {
   /** All file relpaths under the wiki root (incl. raw/), for accurate md-link checks. */
   allFiles?: ReadonlySet<string>;
+  /** Required sections per kind (from ProjectConfig); absent kind ⇒ no check. */
+  requiredSections?: ReadonlyMap<ArtifactKind, readonly RequiredSection[]>;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
@@ -133,7 +138,88 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     }
   }
 
+  // 6. Required sections per kind (agnostic: ProjectConfig declares them). Core
+  //    asserts STRUCTURAL presence (and link count); whether the linked element is
+  //    semantically correct stays an LLM judgement (plan §3.4).
+  for (const p of g.pages) {
+    const kind = kindOfPage(p);
+    if (kind == null) continue;
+    const required = ctx.requiredSections?.get(kind);
+    if (!required || required.length === 0) continue;
+    const present = new Set([...p.headings, ...p.labels].map(normalizeSection));
+    for (const sec of required) {
+      const key = normalizeSection(sec.marker);
+      if (!present.has(key)) {
+        findings.push({
+          rule: 'missing-required-section',
+          severity: sec.severity,
+          file: p.relPath,
+          message: `${kind} page is missing required section "${sec.marker}"`,
+        });
+        continue; // an absent section cannot be checked for links
+      }
+      if (sec.minWikilinks >= 1 && (p.sectionWikilinkCounts.get(key) ?? 0) < sec.minWikilinks) {
+        findings.push({
+          rule: 'required-section-underlinked',
+          severity: sec.severity,
+          file: p.relPath,
+          message: `${kind} section "${sec.marker}" has fewer than ${sec.minWikilinks} [[wikilink]]`,
+        });
+      }
+    }
+  }
+
   return sortFindings(findings);
+}
+
+const MARKER_INDEPENDENT_RULES = new Set(['missing-required-section', 'required-section-underlinked']);
+
+/**
+ * Baseline suppression key. For required-section rules the message embeds the
+ * config-defined marker text, so the key omits the message and uses the kind
+ * instead — editing a marker in config.json then does NOT re-flood baselined
+ * pages (plan §3.5 / fix #7). All other rules key on the message as before.
+ */
+export function baselineKey(f: LintFinding): string {
+  const file = f.file ?? '';
+  if (MARKER_INDEPENDENT_RULES.has(f.rule)) {
+    return `${f.rule}|${file}|${kindOfRelPath(file) ?? ''}`;
+  }
+  return `${f.rule}|${file}|${f.message}`;
+}
+
+export interface SupersededCitation {
+  citingFile: string;
+  citingKind: ArtifactKind | null;
+  targetAdr: string;
+  targetStatus: 'superseded' | 'deprecated';
+}
+
+/**
+ * Deterministic candidate-gather (NOT a hard rule): pages (other than ADRs)
+ * that link a superseded/deprecated ADR. A blanket rule would false-positive on
+ * legitimate historical citations, so Core only collects; the LLM/human judges
+ * live-dependency vs provenance (plan §3.5 / §4.6). No throw; empty = absent-data.
+ */
+export function gatherSupersededCitations(g: GraphSnapshot): SupersededCitation[] {
+  const sup = new Map<string, 'superseded' | 'deprecated'>();
+  for (const adr of pagesOfKind(g, ['adr'])) {
+    const s = String((adr.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
+    if (s === 'superseded' || s === 'deprecated') sup.set(adr.basename, s);
+  }
+  const out: SupersededCitation[] = [];
+  for (const p of g.pages) {
+    if (kindOfPage(p) === 'adr') continue; // ADR→ADR citation is expected
+    for (const l of p.links) {
+      const st = sup.get(l.target);
+      if (st) {
+        out.push({ citingFile: p.relPath, citingKind: kindOfPage(p), targetAdr: l.target, targetStatus: st });
+      }
+    }
+  }
+  return out.sort(
+    (a, b) => a.citingFile.localeCompare(b.citingFile) || a.targetAdr.localeCompare(b.targetAdr),
+  );
 }
 
 /** Stable ordering for reproducible output (golden tests). */

@@ -54,7 +54,9 @@ function migrationContext(opts: GlobalOpts): MigrationContext {
   return {
     abs: (relPath: string) => path.join(root, relPath),
     fs,
-    lint: async () => (await lintWiki(repo)).findings,
+    // Baseline must be computed with the SAME required-sections the runtime lint
+    // uses, or suppression keys won't match (plan §3.7 fix #8).
+    lint: async () => (await lintWiki(repo, { config: await loadProjectConfig(opts) })).findings,
     hash: (content: string) => createHash('sha256').update(content).digest('hex'),
     now: () => clock.now(),
   };
@@ -192,8 +194,11 @@ async function main(): Promise<void> {
         if (idx < 0 || !fp.endsWith('.md')) process.exit(0);
         const root = fp.slice(0, idx + WIKI_MARKER.length - 1); // .../docs/architecture
         const rel = fp.slice(idx + WIKI_MARKER.length);
-        const repo = new FoamWikiRepository(root, new NodeFileSystem());
-        const report = await lintWiki(repo, { changed: [rel], severity: 'high' });
+        const fs = new NodeFileSystem();
+        const repo = new FoamWikiRepository(root, fs);
+        // Cheap: one small JSON read; lets required-section (high) findings fire on edit.
+        const config = ProjectConfig.from(await new FileProjectConfigStore(root, fs).read());
+        const report = await lintWiki(repo, { changed: [rel], severity: 'high', config });
         if (report.findings.length > 0) {
           process.stdout.write(`${JSON.stringify({ ok: false, command: 'hook-lint-changed', data: report })}\n`);
           process.exit(2);
@@ -271,6 +276,7 @@ async function main(): Promise<void> {
         const report = await lintWiki(repo, {
           changed: opts.changed ? csv(opts.changed) : undefined,
           severity: opts.severity as Severity | undefined,
+          config: await loadProjectConfig(opts),
         });
         emit({ ok: report.findings.length === 0, command: 'lint', data: report });
         if (report.findings.length > 0) process.exit(2);
@@ -284,7 +290,7 @@ async function main(): Promise<void> {
     .action(async (opts: GlobalOpts) => {
       try {
         const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
-        const report = await lintWiki(repo, {});
+        const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
         const broken = report.findings.filter((f) => f.rule.startsWith('broken'));
         emit({
           ok: broken.length === 0,

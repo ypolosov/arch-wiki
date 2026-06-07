@@ -19,6 +19,12 @@ export interface WikiPage {
   links: WikiLink[];
   /** Relative markdown link targets ending in `.md`. */
   mdLinks: string[];
+  /** Heading texts (H1-H6), in document order; `[]` if none. */
+  headings: string[];
+  /** Bold inline labels (`**Label:**`), in document order; `[]` if none. */
+  labels: string[];
+  /** normalized-section-title → count of `[[wikilinks]]` under that section. */
+  sectionWikilinkCounts: Map<string, number>;
 }
 
 const FOLDER_TO_KIND: Record<string, ArtifactKind> = {};
@@ -29,4 +35,10 @@ for (const k of Object.keys(ARTIFACT_SPECS) as ArtifactKind[]) {
 /** Classify a page by its folder (robust even when frontmatter is absent). */
 export function kindOfPage(page: WikiPage): ArtifactKind | null {
   return FOLDER_TO_KIND[page.folder] ?? null;
+}
+
+/** Classify by a wiki-relative path (for findings that carry only a path). */
+export function kindOfRelPath(relPath: string): ArtifactKind | null {
+  const folder = relPath.includes('/') ? relPath.replace(/\/[^/]+$/, '') : '';
+  return FOLDER_TO_KIND[folder] ?? null;
 }

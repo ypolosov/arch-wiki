@@ -5,7 +5,7 @@ import { WikiRepositoryPort } from '../../application/ports/WikiRepositoryPort';
 import { ArtifactId } from '../../domain/model/ArtifactId';
 import { ARTIFACT_SPECS, ArtifactSpec, ArtifactKind } from '../../domain/model/ArtifactType';
 import { WikiPage } from '../../domain/model/WikiPage';
-import { scanLinks } from '../../domain/services/WikilinkScanner';
+import { scanPage } from '../../domain/services/WikilinkScanner';
 
 // Top-level folders never treated as Layer-2 wiki pages.
 const EXCLUDED_TOP = new Set(['raw', 'c4', '.foam', '.arch-wiki', 'out', 'node_modules', '.git']);
@@ -56,7 +56,7 @@ export class FoamWikiRepository implements WikiRepositoryPort {
       if (EXCLUDED_TOP.has(top)) continue;
       const raw = await this.fs.readFile(absFile);
       const parsed = matter(raw);
-      const { links, mdLinks } = scanLinks(parsed.content);
+      const { links, mdLinks, headings, labels, sectionWikilinkCounts } = scanPage(parsed.content);
       const dir = path.posix.dirname(rel);
       pages.push({
         relPath: rel,
@@ -65,6 +65,9 @@ export class FoamWikiRepository implements WikiRepositoryPort {
         frontmatter: (parsed.data ?? {}) as Record<string, unknown>,
         links,
         mdLinks,
+        headings,
+        labels,
+        sectionWikilinkCounts,
       });
     }
     return pages;

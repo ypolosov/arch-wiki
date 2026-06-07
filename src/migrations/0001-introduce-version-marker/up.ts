@@ -1,4 +1,5 @@
 import { Migration } from '../types';
+import { baselineKey } from '../../domain/services/LintRuleSet';
 
 const TEMPLATES_DIR = '.foam/templates';
 
@@ -28,9 +29,9 @@ export const migration0001: Migration = {
     );
     log.push(`snapshotted ${Object.keys(snapshot).length} curated template(s)`);
 
-    const baseline = (await ctx.lint())
-      .map((f) => `${f.rule}|${f.file ?? ''}|${f.message}`)
-      .sort();
+    // Same key the runtime lint suppresses on (marker-independent for
+    // required-section rules) so baselined findings stay suppressed (plan §3.8).
+    const baseline = (await ctx.lint()).map(baselineKey).sort();
     await ctx.fs.writeFile(
       ctx.abs('.arch-wiki/lint-baseline.json'),
       `${JSON.stringify(baseline, null, 2)}\n`,

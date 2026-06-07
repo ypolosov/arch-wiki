@@ -1,5 +1,16 @@
+import { ARTIFACT_SPECS, ArtifactKind } from '../../domain/model/ArtifactType';
+import { RequiredSection } from '../../domain/model/ProjectConfigSchema';
 import { buildGraph } from '../../domain/model/Graph';
-import { runLint, LintFinding, Severity, SEVERITY_RANK } from '../../domain/services/LintRuleSet';
+import {
+  runLint,
+  baselineKey,
+  gatherSupersededCitations,
+  LintFinding,
+  Severity,
+  SEVERITY_RANK,
+  SupersededCitation,
+} from '../../domain/services/LintRuleSet';
+import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
 export interface LintOptions {
@@ -7,11 +18,15 @@ export interface LintOptions {
   changed?: string[];
   /** Minimum severity to report. */
   severity?: Severity;
+  /** Project profile; supplies required-sections-per-kind (absent ⇒ no such checks). */
+  config?: ProjectConfig;
 }
 
 export interface LintReport {
   findings: LintFinding[];
   counts: { high: number; medium: number; low: number };
+  /** Candidate citations of superseded ADRs for LLM/human triage (not findings). */
+  supersededCitations: SupersededCitation[];
 }
 
 export async function lintWiki(
@@ -24,12 +39,21 @@ export async function lintWiki(
     repo.readLintBaseline(),
   ]);
   const graph = buildGraph(pages);
-  let findings = runLint(graph, { allFiles: new Set(allFilesList) });
+
+  const requiredSections = new Map<ArtifactKind, readonly RequiredSection[]>();
+  if (opts.config) {
+    for (const kind of Object.keys(ARTIFACT_SPECS) as ArtifactKind[]) {
+      const rs = opts.config.requiredSections(kind);
+      if (rs.length) requiredSections.set(kind, rs);
+    }
+  }
+
+  let findings = runLint(graph, { allFiles: new Set(allFilesList), requiredSections });
 
   // Suppress findings recorded as a pre-existing baseline at adoption time.
   if (baselineList.length) {
     const baseline = new Set(baselineList);
-    findings = findings.filter((f) => !baseline.has(`${f.rule}|${f.file ?? ''}|${f.message}`));
+    findings = findings.filter((f) => !baseline.has(baselineKey(f)));
   }
 
   if (opts.changed && opts.changed.length) {
@@ -43,5 +67,5 @@ export async function lintWiki(
 
   const counts = { high: 0, medium: 0, low: 0 };
   for (const f of findings) counts[f.severity] += 1;
-  return { findings, counts };
+  return { findings, counts, supersededCitations: gatherSupersededCitations(graph) };
 }

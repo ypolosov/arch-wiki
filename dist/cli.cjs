@@ -4357,6 +4357,11 @@ function resolveKind(token) {
 // src/domain/services/WikilinkScanner.ts
 var WIKILINK = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
 var MDLINK = /\[[^\]]*\]\(([^)]+)\)/g;
+var HEADING = /^#{1,6}\s+(.+?)\s*$/;
+var LABEL = /^\s*\*\*([^*]+?):\*\*/;
+function normalizeSection(s) {
+  return s.trim().replace(/^\*\*\s*/, "").replace(/\s*\*\*$/, "").replace(/\s*:\s*$/, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
 function scanLinks(body) {
   const links = [];
   for (const m of body.matchAll(WIKILINK)) {
@@ -4375,6 +4380,31 @@ function scanLinks(body) {
     if (pathPart.endsWith(".md")) mdLinks.push(pathPart);
   }
   return { links, mdLinks };
+}
+function scanPage(body) {
+  const { links, mdLinks } = scanLinks(body);
+  const headings = [];
+  const labels = [];
+  const sectionWikilinkCounts = /* @__PURE__ */ new Map();
+  let current = "";
+  for (const line of body.split("\n")) {
+    const h = HEADING.exec(line);
+    if (h) {
+      headings.push(h[1]);
+      current = normalizeSection(h[1]);
+    } else {
+      const lb = LABEL.exec(line);
+      if (lb) {
+        labels.push(lb[1]);
+        current = normalizeSection(lb[1]);
+      }
+    }
+    if (!current) continue;
+    let n = 0;
+    for (const m of line.matchAll(WIKILINK)) if (!m[1]) n += 1;
+    if (n > 0) sectionWikilinkCounts.set(current, (sectionWikilinkCounts.get(current) ?? 0) + n);
+  }
+  return { links, mdLinks, headings, labels, sectionWikilinkCounts };
 }
 
 // src/adapters/repo/FoamWikiRepository.ts
@@ -4416,7 +4446,7 @@ var FoamWikiRepository = class {
       if (EXCLUDED_TOP.has(top)) continue;
       const raw = await this.fs.readFile(absFile);
       const parsed = (0, import_gray_matter.default)(raw);
-      const { links, mdLinks } = scanLinks(parsed.content);
+      const { links, mdLinks, headings, labels, sectionWikilinkCounts } = scanPage(parsed.content);
       const dir = path3.posix.dirname(rel);
       pages.push({
         relPath: rel,
@@ -4424,7 +4454,10 @@ var FoamWikiRepository = class {
         folder: dir === "." ? "" : dir,
         frontmatter: parsed.data ?? {},
         links,
-        mdLinks
+        mdLinks,
+        headings,
+        labels,
+        sectionWikilinkCounts
       });
     }
     return pages;
@@ -8815,6 +8848,10 @@ for (const k of Object.keys(ARTIFACT_SPECS)) {
 function kindOfPage(page) {
   return FOLDER_TO_KIND[page.folder] ?? null;
 }
+function kindOfRelPath(relPath) {
+  const folder = relPath.includes("/") ? relPath.replace(/\/[^/]+$/, "") : "";
+  return FOLDER_TO_KIND[folder] ?? null;
+}
 
 // src/domain/model/Graph.ts
 function buildGraph(pages) {
@@ -8971,7 +9008,62 @@ function runLint(g, ctx = {}) {
       });
     }
   }
+  for (const p of g.pages) {
+    const kind = kindOfPage(p);
+    if (kind == null) continue;
+    const required = ctx.requiredSections?.get(kind);
+    if (!required || required.length === 0) continue;
+    const present2 = new Set([...p.headings, ...p.labels].map(normalizeSection));
+    for (const sec of required) {
+      const key = normalizeSection(sec.marker);
+      if (!present2.has(key)) {
+        findings.push({
+          rule: "missing-required-section",
+          severity: sec.severity,
+          file: p.relPath,
+          message: `${kind} page is missing required section "${sec.marker}"`
+        });
+        continue;
+      }
+      if (sec.minWikilinks >= 1 && (p.sectionWikilinkCounts.get(key) ?? 0) < sec.minWikilinks) {
+        findings.push({
+          rule: "required-section-underlinked",
+          severity: sec.severity,
+          file: p.relPath,
+          message: `${kind} section "${sec.marker}" has fewer than ${sec.minWikilinks} [[wikilink]]`
+        });
+      }
+    }
+  }
   return sortFindings(findings);
+}
+var MARKER_INDEPENDENT_RULES = /* @__PURE__ */ new Set(["missing-required-section", "required-section-underlinked"]);
+function baselineKey(f) {
+  const file = f.file ?? "";
+  if (MARKER_INDEPENDENT_RULES.has(f.rule)) {
+    return `${f.rule}|${file}|${kindOfRelPath(file) ?? ""}`;
+  }
+  return `${f.rule}|${file}|${f.message}`;
+}
+function gatherSupersededCitations(g) {
+  const sup = /* @__PURE__ */ new Map();
+  for (const adr of pagesOfKind(g, ["adr"])) {
+    const s = String(adr.frontmatter.status ?? "").toLowerCase();
+    if (s === "superseded" || s === "deprecated") sup.set(adr.basename, s);
+  }
+  const out = [];
+  for (const p of g.pages) {
+    if (kindOfPage(p) === "adr") continue;
+    for (const l of p.links) {
+      const st = sup.get(l.target);
+      if (st) {
+        out.push({ citingFile: p.relPath, citingKind: kindOfPage(p), targetAdr: l.target, targetStatus: st });
+      }
+    }
+  }
+  return out.sort(
+    (a, b) => a.citingFile.localeCompare(b.citingFile) || a.targetAdr.localeCompare(b.targetAdr)
+  );
 }
 function sortFindings(findings) {
   return [...findings].sort(
@@ -8987,10 +9079,17 @@ async function lintWiki(repo, opts = {}) {
     repo.readLintBaseline()
   ]);
   const graph = buildGraph(pages);
-  let findings = runLint(graph, { allFiles: new Set(allFilesList) });
+  const requiredSections = /* @__PURE__ */ new Map();
+  if (opts.config) {
+    for (const kind of Object.keys(ARTIFACT_SPECS)) {
+      const rs = opts.config.requiredSections(kind);
+      if (rs.length) requiredSections.set(kind, rs);
+    }
+  }
+  let findings = runLint(graph, { allFiles: new Set(allFilesList), requiredSections });
   if (baselineList.length) {
     const baseline = new Set(baselineList);
-    findings = findings.filter((f) => !baseline.has(`${f.rule}|${f.file ?? ""}|${f.message}`));
+    findings = findings.filter((f) => !baseline.has(baselineKey(f)));
   }
   if (opts.changed && opts.changed.length) {
     const set = new Set(opts.changed);
@@ -9002,7 +9101,7 @@ async function lintWiki(repo, opts = {}) {
   }
   const counts = { high: 0, medium: 0, low: 0 };
   for (const f of findings) counts[f.severity] += 1;
-  return { findings, counts };
+  return { findings, counts, supersededCitations: gatherSupersededCitations(graph) };
 }
 
 // src/application/usecases/RecordRisk.ts
@@ -9108,7 +9207,7 @@ var migration0001 = {
 `
     );
     log.push(`snapshotted ${Object.keys(snapshot).length} curated template(s)`);
-    const baseline = (await ctx.lint()).map((f) => `${f.rule}|${f.file ?? ""}|${f.message}`).sort();
+    const baseline = (await ctx.lint()).map(baselineKey).sort();
     await ctx.fs.writeFile(
       ctx.abs(".arch-wiki/lint-baseline.json"),
       `${JSON.stringify(baseline, null, 2)}
@@ -9218,7 +9317,9 @@ function migrationContext(opts) {
   return {
     abs: (relPath) => path6.join(root, relPath),
     fs: fs2,
-    lint: async () => (await lintWiki(repo)).findings,
+    // Baseline must be computed with the SAME required-sections the runtime lint
+    // uses, or suppression keys won't match (plan §3.7 fix #8).
+    lint: async () => (await lintWiki(repo, { config: await loadProjectConfig(opts) })).findings,
     hash: (content) => (0, import_node_crypto.createHash)("sha256").update(content).digest("hex"),
     now: () => clock.now()
   };
@@ -9306,8 +9407,10 @@ async function main() {
       if (idx < 0 || !fp.endsWith(".md")) process.exit(0);
       const root = fp.slice(0, idx + WIKI_MARKER.length - 1);
       const rel = fp.slice(idx + WIKI_MARKER.length);
-      const repo = new FoamWikiRepository(root, new NodeFileSystem());
-      const report = await lintWiki(repo, { changed: [rel], severity: "high" });
+      const fs2 = new NodeFileSystem();
+      const repo = new FoamWikiRepository(root, fs2);
+      const config = ProjectConfig.from(await new FileProjectConfigStore(root, fs2).read());
+      const report = await lintWiki(repo, { changed: [rel], severity: "high", config });
       if (report.findings.length > 0) {
         process.stdout.write(`${JSON.stringify({ ok: false, command: "hook-lint-changed", data: report })}
 `);
@@ -9372,7 +9475,8 @@ async function main() {
       const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
       const report = await lintWiki(repo, {
         changed: opts.changed ? csv(opts.changed) : void 0,
-        severity: opts.severity
+        severity: opts.severity,
+        config: await loadProjectConfig(opts)
       });
       emit({ ok: report.findings.length === 0, command: "lint", data: report });
       if (report.findings.length > 0) process.exit(2);
@@ -9383,7 +9487,7 @@ async function main() {
   cli.command("validate-graph", "check links, orphans, coverage (broken links block)").action(async (opts) => {
     try {
       const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
-      const report = await lintWiki(repo, {});
+      const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
       const broken = report.findings.filter((f) => f.rule.startsWith("broken"));
       emit({
         ok: broken.length === 0,

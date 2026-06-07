@@ -4,6 +4,16 @@ import * as path from 'node:path';
 import { lintWiki } from '../../src/application/usecases/LintWiki';
 import { NodeFileSystem } from '../../src/adapters/fs/NodeFileSystem';
 import { FoamWikiRepository } from '../../src/adapters/repo/FoamWikiRepository';
+import { ProjectConfig } from '../../src/domain/services/ProjectConfig';
+import { ProjectConfigSchema } from '../../src/domain/model/ProjectConfigSchema';
+import { baselineKey } from '../../src/domain/services/LintRuleSet';
+
+const configWith = (marker: string): ProjectConfig =>
+  ProjectConfig.from(
+    ProjectConfigSchema.parse({
+      requiredSections: { 'quality-attribute': [{ marker, minWikilinks: 1, severity: 'high' }] },
+    }),
+  );
 
 async function tmpRoot(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'aw-lint-'));
@@ -67,5 +77,33 @@ describe('lintWiki (integration)', () => {
     const high = await lintWiki(repo, { severity: 'high' });
     expect(high.findings.every((f) => f.severity === 'high')).toBe(true);
     expect(high.counts.medium).toBe(0);
+  });
+
+  it('required-section: flags a QA missing the configured section; baseline suppresses it; editing the marker keeps it suppressed', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    // QA-020 has no "C4 elements" section.
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-020-x.md'),
+      '---\ntype: quality-attribute\n---\n# QA-020\n## Scenario\n',
+    );
+    const repo = new FoamWikiRepository(root, sys);
+
+    const before = await lintWiki(repo, { config: configWith('C4 elements') });
+    const missing = before.findings.filter((f) => f.rule === 'missing-required-section');
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.file).toBe('drivers/quality-attributes/QA-020-x.md');
+
+    // Record the baseline with the same key the runtime suppresses on.
+    await sys.writeFile(
+      path.join(root, '.arch-wiki/lint-baseline.json'),
+      JSON.stringify(before.findings.map(baselineKey)),
+    );
+    const after = await lintWiki(repo, { config: configWith('C4 elements') });
+    expect(after.findings.some((f) => f.rule === 'missing-required-section')).toBe(false);
+
+    // Edit the marker text in config → marker-independent key → still suppressed (fix #7).
+    const afterEdit = await lintWiki(repo, { config: configWith('C4 Elements:') });
+    expect(afterEdit.findings.some((f) => f.rule === 'missing-required-section')).toBe(false);
   });
 });
