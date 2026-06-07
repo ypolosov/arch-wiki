@@ -3,4 +3,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 *.log
+.claude/
 # NOTE: dist/ is intentionally committed (the runtime bundle the target runs).
