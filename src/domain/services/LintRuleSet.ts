@@ -196,10 +196,17 @@ export interface SupersededCitation {
 }
 
 /**
- * Deterministic candidate-gather (NOT a hard rule): pages (other than ADRs)
- * that link a superseded/deprecated ADR. A blanket rule would false-positive on
- * legitimate historical citations, so Core only collects; the LLM/human judges
- * live-dependency vs provenance (plan §3.5 / §4.6). No throw; empty = absent-data.
+ * Deterministic candidate-gather (NOT a hard rule): LIVE design artifacts that
+ * link a superseded/deprecated ADR. A blanket rule would false-positive on
+ * legitimate historical citations, so Core only collects and the LLM/human judges
+ * live-dependency vs provenance (plan §3.5 / §4.6). To keep the candidate set
+ * signal-bearing (gt surfaced 39 mostly-historical edges), Core structurally
+ * excludes pages that are NEVER a live design dependency — a fact, not a judgement
+ * (invariant 1): ADRs (MADR supersession hygiene), iterations (timeline
+ * narratives), and STRUCTURAL register/derived/index pages (risks, kanban,
+ * gap-analysis, glossary, index, utility-tree, …). What remains — drivers,
+ * concepts, arc42 hubs, entities — is where a citation can mean a current
+ * dependency. No throw; empty = absent-data.
  */
 export function gatherSupersededCitations(g: GraphSnapshot): SupersededCitation[] {
   const sup = new Map<string, 'superseded' | 'deprecated'>();
@@ -209,11 +216,13 @@ export function gatherSupersededCitations(g: GraphSnapshot): SupersededCitation[
   }
   const out: SupersededCitation[] = [];
   for (const p of g.pages) {
-    if (kindOfPage(p) === 'adr') continue; // ADR→ADR citation is expected
+    const kind = kindOfPage(p);
+    if (kind === 'adr' || kind === 'iteration') continue; // expected / historical narrative
+    if (STRUCTURAL.has(p.basename)) continue; // register/derived/index — never a live dependency
     for (const l of p.links) {
       const st = sup.get(l.target);
       if (st) {
-        out.push({ citingFile: p.relPath, citingKind: kindOfPage(p), targetAdr: l.target, targetStatus: st });
+        out.push({ citingFile: p.relPath, citingKind: kind, targetAdr: l.target, targetStatus: st });
       }
     }
   }

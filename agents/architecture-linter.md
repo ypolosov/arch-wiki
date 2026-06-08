@@ -13,7 +13,11 @@ The `arch-wiki lint --json` output. Deterministic `findings`: orphans, broken/ty
 wikilinks, broken md-links, uncovered drivers, superseded-without-successor, and
 **required-section** rules (`missing-required-section` / `required-section-underlinked`,
 configured per kind in `.arch-wiki/config.json`). The output also carries a
-`supersededCitations` **candidate** block (not findings). If you weren't given the
+`supersededCitations` **candidate** block (not findings). Core already filters this
+to LIVE design artifacts only — drivers (UC/QA/CONC), concepts, arc42 hubs, entities —
+and structurally drops ADR→ADR, iteration timelines, and register/derived pages
+(risks/kanban/gap-analysis/glossary/index/utility-tree). So each remaining candidate
+is a page where a citation *could* be a current dependency. If you weren't given the
 output, run `arch-wiki lint --json` yourself.
 
 ## Do
@@ -25,9 +29,10 @@ output, run `arch-wiki lint --json` yourself.
      and linked; you judge whether the *linked element is the right one* for the
      scenario and whether the QA links a relevant ADR. Read `docs/architecture/CLAUDE.md`
      for the canonical C4 vocabulary first.
-   - **Superseded citations**: for each entry in the `supersededCitations` candidate
-     block, decide live-dependency-on-a-dead-decision (→ propose a `risks.md` row via
-     `arch-wiki record-risk`) vs a legitimate historical/provenance citation (→ leave).
+   - **Superseded citations**: the candidate block is already narrowed to live
+     design artifacts. For each entry decide whether the page leans on the dead
+     decision as *current* rationale (→ propose a `risks.md` row via
+     `arch-wiki record-risk`) vs a legitimate provenance/"see also" mention (→ leave).
    - **Terminology drift**: recurring capitalised domain nouns absent from `glossary.md`.
 3. Propose concrete `risks.md` rows for genuine risks/debt.
 

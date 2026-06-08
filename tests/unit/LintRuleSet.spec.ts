@@ -135,11 +135,14 @@ describe('baselineKey', () => {
 });
 
 describe('gatherSupersededCitations', () => {
-  it('collects non-ADR pages citing a superseded ADR; excludes ADR→ADR', () => {
+  it('collects only LIVE design artifacts citing a superseded ADR; excludes ADR/iteration/STRUCTURAL', () => {
     const g = buildGraph([
       page('adrs/0007-old.md', { frontmatter: { status: 'superseded' }, links: [wl('0019-new')] }),
-      page('adrs/0019-new.md', { links: [wl('0007-old')] }), // ADR→ADR excluded
-      page('drivers/quality-attributes/QA-018-x.md', { links: [wl('0007-old')] }),
+      page('adrs/0019-new.md', { links: [wl('0007-old')] }), // ADR→ADR excluded (MADR hygiene)
+      page('iterations/ITER-01.md', { links: [wl('0007-old')] }), // iteration timeline — excluded
+      page('risks.md', { links: [wl('0007-old')] }), // STRUCTURAL register — excluded
+      page('gap-analysis.md', { links: [wl('0007-old')] }), // STRUCTURAL derived — excluded
+      page('drivers/quality-attributes/QA-018-x.md', { links: [wl('0007-old')] }), // live driver — kept
     ]);
     const cites = gatherSupersededCitations(g);
     expect(cites).toEqual([
@@ -150,5 +153,15 @@ describe('gatherSupersededCitations', () => {
         targetStatus: 'superseded',
       },
     ]);
+  });
+
+  it('keeps concept and arc42 hub citations (also live design artifacts)', () => {
+    const g = buildGraph([
+      page('adrs/0023-old.md', { frontmatter: { status: 'deprecated' }, links: [] }),
+      page('concepts/caching.md', { links: [wl('0023-old')] }),
+      page('arc42/09-architecture-decisions.md', { links: [wl('0023-old')] }),
+    ]);
+    const cites = gatherSupersededCitations(g).map((c) => c.citingFile);
+    expect(cites).toEqual(['arc42/09-architecture-decisions.md', 'concepts/caching.md']);
   });
 });

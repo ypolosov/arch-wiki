@@ -9631,11 +9631,13 @@ function gatherSupersededCitations(g) {
   }
   const out = [];
   for (const p of g.pages) {
-    if (kindOfPage(p) === "adr") continue;
+    const kind = kindOfPage(p);
+    if (kind === "adr" || kind === "iteration") continue;
+    if (STRUCTURAL.has(p.basename)) continue;
     for (const l of p.links) {
       const st = sup.get(l.target);
       if (st) {
-        out.push({ citingFile: p.relPath, citingKind: kindOfPage(p), targetAdr: l.target, targetStatus: st });
+        out.push({ citingFile: p.relPath, citingKind: kind, targetAdr: l.target, targetStatus: st });
       }
     }
   }
@@ -9939,7 +9941,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.4.0";
+var PLUGIN_VERSION = "0.4.1";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
