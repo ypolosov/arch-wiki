@@ -56,7 +56,10 @@ describe('renderIssuePayload + recordIssue (integration)', () => {
     expect(env.prefix).toBe('[Arch]');
     expect(env.title).toBe('Latency');
     expect(env.issueTitle).toBe('[Arch] Latency');
-    expect(env.payload).toContain('[[QA-001-latency|QA-001]]');
+    // Variant B: the payload is a self-contained skeleton (no wiki ids/links); the
+    // command's map step inlines artifact excerpts. Core still carries the ref in `drivers`.
+    expect(env.payload).toContain('[Arch] Latency');
+    expect(env.drivers).toEqual(['[[QA-001-latency|QA-001]]']);
     expect(env.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 

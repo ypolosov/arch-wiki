@@ -1,23 +1,22 @@
 # {{prefix}} {{title}}
 
-**Источник:** [[{{source}}]]
+<!-- Self-contained issue. /arch-wiki:issue fills each section with INLINE text from the
+     source driver and the decisions/constraints it references — no wiki artifact ids
+     (QA-/ADR-/CON-), no links, no footer. -->
 
 ## Контекст
-Драйвер: {{driver}}
-<!-- Кратко: почему задача нужна, ссылка на драйвер/ADR. -->
+<!-- Что и зачем; опорные решения как инлайн-выжимки; целевые показатели. -->
 
 ## Цель
-<!-- Что должно быть достигнуто. -->
 
 ## Объём
 - В объёме: …
 - Не в объёме: …
 
 ## Артефакт-результат
-<!-- Какой артефакт wiki/ADR появится в результате. -->
 
-## Драйверы
-- {{driver}}
+## Требования и ограничения
+<!-- Инлайн: измеримые требования сценария + обязательные ограничения/SLA. -->
 
 ## DoD
 - …
