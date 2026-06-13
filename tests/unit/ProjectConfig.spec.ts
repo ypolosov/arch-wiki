@@ -61,4 +61,12 @@ describe('ProjectConfig (pure)', () => {
     const c = cfg({ c4: { dir: 'c4', validate: 'npm run validate' } });
     expect(c.c4().validate).toBe('npm run validate');
   });
+
+  it('confluenceSiteUrl(): null when absent; trailing slash trimmed when set', () => {
+    expect(ProjectConfig.from(null).confluenceSiteUrl()).toBeNull();
+    expect(cfg({ integrations: { confluence: { space: 'PP' } } }).confluenceSiteUrl()).toBeNull();
+    expect(
+      cfg({ integrations: { confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net/' } } }).confluenceSiteUrl(),
+    ).toBe('https://acme.atlassian.net');
+  });
 });

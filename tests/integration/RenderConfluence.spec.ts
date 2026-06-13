@@ -111,6 +111,25 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(after.orphans).toEqual([]);
   });
 
+  it('v0.7: splits the title into prefix/label and neutralizes repo-relative links to plain text', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'entities/cache.md'),
+      '# Cache\n\nSee [iterations](../iterations/) and [config](CLAUDE.md).\n',
+    );
+    const plan = await renderConfluencePayload(deps(root));
+
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.titlePrefix).toBe('QA-001:');
+    expect(qa1.titleLabel).toBe('Latency');
+
+    const cache = plan.pages.find((p) => p.basename === 'cache')!;
+    expect(cache.body).toContain('See iterations and config.');
+    expect(cache.body).not.toContain('../iterations/');
+    expect(cache.warnings.some((w) => w.includes('repo-relative'))).toBe(true);
+  });
+
   it('RU projection: masks spans, emits language + merged preserveTerms, hash adds language and is stable', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();

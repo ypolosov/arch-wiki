@@ -94,6 +94,13 @@ export function sortParentFirst(
 }
 
 /**
+ * The transient page-id used for a cross-link whose included target is not yet
+ * published (only when `reserveUnresolved`). Pass 2 of publish overwrites it with the
+ * real id once the target lands in the ledger — see `resolveCrossLinks`.
+ */
+export const PENDING_PAGE_ID = 'pending';
+
+/**
  * Replace `[[wikilinks]]` in a page body with resolved cross-links. A target that
  * is a live, included, PUBLISHED page → a markdown link to the page's ROOT-RELATIVE
  * Confluence URL (`/wiki/spaces/<spaceKey>/pages/<id>`), which resolves from any
@@ -103,6 +110,13 @@ export function sortParentFirst(
  * path. Deterministic given (graph, publishedMap, includedSources, spaceKey): no
  * fallback by title (so the body does not oscillate between runs). Returns the body +
  * cross-link log.
+ *
+ * `reserveUnresolved` (translation mode): an included-but-unpublished target is rendered
+ * as a masked-link to a deterministic `…/pages/pending` URL instead of plain text. This
+ * keeps the *masked body fed to the translator byte-identical* between pass 1 (target not
+ * yet published) and pass 2 (resolved) — only the restore VALUE changes — so the page need
+ * not be re-translated on pass 2 (gt feedback). Excluded/absent targets stay plain text
+ * (they never resolve → no dangling link). Off (default) preserves the English-mirror behaviour.
  */
 export function resolveCrossLinks(
   content: string,
@@ -110,20 +124,75 @@ export function resolveCrossLinks(
   publishedMap: ReadonlyMap<string, string>, // source relPath → Confluence page id
   includedSources: ReadonlySet<string>,
   spaceKey: string, // Confluence space key, for the root-relative cross-link URL
+  reserveUnresolved = false,
 ): { body: string; crossLinks: CrossLink[] } {
   const crossLinks: CrossLink[] = [];
   const body = content.replace(WIKILINK_RE, (_m, _bang, target: string, alias?: string) => {
     const label = (alias ?? target).trim();
     const page = g.byBasename.get(target);
-    const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : undefined;
+    const included = page ? includedSources.has(page.relPath) : false;
+    const pageId = included ? publishedMap.get(page!.relPath) : undefined;
     if (pageId) {
       crossLinks.push({ target, resolved: true, pageId });
       return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+    }
+    if (reserveUnresolved && included) {
+      // Reserve the masked-link slot so the translatable body is stable across passes.
+      crossLinks.push({ target, resolved: false });
+      return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
     }
     crossLinks.push({ target, resolved: false });
     return label;
   });
   return { body, crossLinks };
+}
+
+/**
+ * Split an artifact heading into its id prefix and the translatable label, e.g.
+ * `UC-014: Login` → `{ prefix: 'UC-014:', label: 'Login' }`; a title without an id
+ * prefix → `{ prefix: '', label: <title> }`. Lets the RU projection translate only the
+ * label while the id prefix (trace key) stays byte-exact. Pure.
+ */
+export function splitTitle(title: string): { prefix: string; label: string } {
+  const m = /^\s*([A-Za-z]+-\d+\S*:)\s*(.*)$/.exec(title);
+  if (m) return { prefix: m[1]!, label: m[2]!.trim() };
+  return { prefix: '', label: title.trim() };
+}
+
+// Markdown link whose URL is kept as-is in the mirror: absolute (http/https/mailto),
+// in-Confluence root-relative (/wiki/…), or a pure #anchor. Anything else is a
+// repo-relative path that 404s in Confluence.
+const KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
+// Non-image markdown link: not preceded by `!`.
+const MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * Neutralise repo-relative markdown links (`[x](../iterations/)`, `[CLAUDE.md](../../CLAUDE.md)`)
+ * to plain text — they are not wiki cross-links and render as dead relative hrefs in Confluence
+ * (gt feedback). Keeps absolute links, resolved `/wiki/…` cross-links, pure `#anchor`s and image
+ * embeds untouched. Pure; returns the body + the stripped URLs (sorted, for warnings).
+ */
+export function neutralizeRepoRelativeLinks(content: string): { body: string; stripped: string[] } {
+  const stripped: string[] = [];
+  const body = content.replace(MD_LINK_RE, (m, label: string, url: string) => {
+    if (KEEP_LINK_URL.test(url)) return m;
+    stripped.push(url);
+    return label;
+  });
+  return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
+}
+
+/**
+ * Build a Confluence page URL. Absolute when `siteUrl` is set (required for a link that
+ * works inside a Jira issue's ADF), else root-relative `/wiki/…`. Pure.
+ */
+export function confluencePageUrl(
+  siteUrl: string | null,
+  spaceKey: string,
+  pageId: string,
+): string {
+  const base = siteUrl ? siteUrl.replace(/\/+$/, '') : '';
+  return `${base}/wiki/spaces/${spaceKey}/pages/${pageId}`;
 }
 
 // ---------------------------------------------------------------------------

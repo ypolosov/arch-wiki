@@ -5,12 +5,15 @@ import { scanPage } from '../../src/domain/services/WikilinkScanner';
 import {
   DEFAULT_EXCLUDE,
   applyRestore,
+  confluencePageUrl,
   extractGlossaryTerms,
   isPageExcluded,
+  neutralizeRepoRelativeLinks,
   parentSourceOf,
   protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
+  splitTitle,
 } from '../../src/domain/services/ConfluenceTree';
 
 function page(relPath: string, opts: { fm?: Record<string, unknown>; body?: string } = {}): WikiPage {
@@ -101,6 +104,62 @@ describe('ConfluenceTree.resolveCrossLinks', () => {
       { target: 'cache', resolved: false },
       { target: 'ghost', resolved: false },
     ]);
+  });
+});
+
+describe('ConfluenceTree.resolveCrossLinks reserveUnresolved (RU stability, v0.7)', () => {
+  it('reserves a pending masked link for an included-but-unpublished target; absent stays plain text', () => {
+    const g = buildGraph([page('drivers/quality-attributes/QA-002.md')]);
+    const included = new Set(['drivers/quality-attributes/QA-002.md']);
+    const { body } = resolveCrossLinks(
+      'See [[QA-002|QA-002]] and [[ghost]].',
+      g,
+      new Map(), // nothing published yet
+      included,
+      'PP',
+      true,
+    );
+    expect(body).toBe('See [QA-002](/wiki/spaces/PP/pages/pending) and ghost.');
+  });
+
+  it('keeps the translatable body byte-stable from pending (pass 1) to resolved (pass 2)', () => {
+    const g = buildGraph([page('a.md'), page('b.md')]);
+    const included = new Set(['a.md', 'b.md']);
+    const pass1 = resolveCrossLinks('x [[b]] y', g, new Map(), included, 'PP', true).body;
+    const pass2 = resolveCrossLinks('x [[b]] y', g, new Map([['b.md', '42']]), included, 'PP', true).body;
+    // The translator sees identical masked text → the page need not be re-translated on pass 2.
+    expect(protectStructuralSpans(pass1).masked).toBe(protectStructuralSpans(pass2).masked);
+  });
+});
+
+describe('ConfluenceTree.splitTitle (v0.7)', () => {
+  it('splits an id-prefixed heading; passes through a plain title', () => {
+    expect(splitTitle('UC-014: Login')).toEqual({ prefix: 'UC-014:', label: 'Login' });
+    expect(splitTitle('ADR-0001: Use Kafka')).toEqual({ prefix: 'ADR-0001:', label: 'Use Kafka' });
+    expect(splitTitle('Overview')).toEqual({ prefix: '', label: 'Overview' });
+  });
+});
+
+describe('ConfluenceTree.neutralizeRepoRelativeLinks (v0.7)', () => {
+  it('strips repo-relative links to plain text; keeps absolute, /wiki and anchors', () => {
+    const src =
+      'See [iters](../iterations/) and [docs](CLAUDE.md) and [QA](/wiki/spaces/PP/pages/9) and [ext](https://x.io) and [a](#sec).';
+    const { body, stripped } = neutralizeRepoRelativeLinks(src);
+    expect(body).toBe('See iters and docs and [QA](/wiki/spaces/PP/pages/9) and [ext](https://x.io) and [a](#sec).');
+    expect(stripped).toEqual(['../iterations/', 'CLAUDE.md']);
+  });
+
+  it('leaves image embeds untouched', () => {
+    expect(neutralizeRepoRelativeLinks('![diagram](../c4/x.png)').body).toBe('![diagram](../c4/x.png)');
+  });
+});
+
+describe('ConfluenceTree.confluencePageUrl (v0.7)', () => {
+  it('absolute with siteUrl (trailing slash trimmed); root-relative without', () => {
+    expect(confluencePageUrl('https://acme.atlassian.net/', 'PP', '123')).toBe(
+      'https://acme.atlassian.net/wiki/spaces/PP/pages/123',
+    );
+    expect(confluencePageUrl(null, 'PP', '123')).toBe('/wiki/spaces/PP/pages/123');
   });
 });
 

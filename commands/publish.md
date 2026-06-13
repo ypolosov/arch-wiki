@@ -16,8 +16,13 @@ Confluence is a **read-only 1:1 mirror** with a visibility filter.
 3. **Human gate:** show the create / update / **DELETE** lists; orphan deletes need explicit confirmation.
 
 **`publish` is a 2-pass cycle** — a cross-link resolves to a real URL only once its target page has a
-page-id in the ledger. Pass 1 creates pages (links to not-yet-created pages stay plain text); pass 2
-updates the now-drifted linking pages. Re-run `render-confluence` between passes.
+page-id in the ledger. Pass 1 creates pages; pass 2 updates the now-drifted linking pages. Re-run
+`render-confluence` between passes. (English mirror: a link to a not-yet-created page stays plain text on
+pass 1. RU mirror: it is reserved as a `…/pages/pending` masked link so the *translatable* body is byte-stable
+across passes — pass 2 changes only the restore value, so you do **not** re-translate the page.)
+
+Note: repo-relative links (`../iterations/`, `CLAUDE.md`, `c4/…`) are **not** wiki cross-links and are
+neutralized to plain text by Core (they would be dead hrefs in Confluence); `data.pages[].warnings` lists them.
 
 **RU projection (when `data.language` is set, e.g. `"ru"`).** The mirror is a TRANSLATED projection; the
 canon stays English in git. For each page, BEFORE publishing, translate its `body` to `data.language`:
@@ -26,8 +31,10 @@ masked code / link-URLs / artifact-ids there) and every term in `data.preserveTe
 placeholders deterministically — pipe the translated body back through Core:
 `arch-wiki finalize-confluence --source <relPath> --plan /tmp/aw-mirror.json < translated.md` → publish the
 `data.body` from its output. If it reports `missing` (a placeholder was dropped) or exits 2, **re-translate**
-that page — never publish a page that lost protected content. When `data.language` is null, publish `body`
-as-is (English).
+that page — never publish a page that lost protected content. **Title (v0.7):** translate `data.titleLabel`
+(keep `data.preserveTerms` verbatim) and set the page title to `<data.titlePrefix> <translated label>` — the
+id prefix (`UC-014:`) stays byte-exact, no mixed-language headings. When `data.language` is null, publish
+`body` + `title` as-is (English).
 
 4. **Pass 1 — create/update parent-first.** For each page in plan order: [translate + `finalize-confluence`
    if `language`] → `createConfluencePage` / `updateConfluencePage` (`contentFormat: markdown`, `spaceId`,

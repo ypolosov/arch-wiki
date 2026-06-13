@@ -93,6 +93,12 @@ const IntegrationsSchema = z
       .object({
         space: z.string(),
         cloudId: z.string(),
+        // CAP-2 (v0.7): the Atlassian site base URL (e.g. https://acme.atlassian.net).
+        // Used to build ABSOLUTE Confluence links inside Jira issues (issue→mirror trace,
+        // render-issue) — Jira ADF wants an absolute href; cloudId is a UUID, not the host.
+        // Absent → render-issue emits root-relative /wiki links (work from Jira on the same
+        // site, but absolute is preferred). The in-Confluence mirror itself stays root-relative.
+        siteUrl: z.string().url(),
         // CAP-2 RU projection (v0.6, plan §13): when `language` is set the mirror is a
         // translated PRESENTATION projection (canon stays English in Layer-2). Absent →
         // publish English as-is (backward-compatible). `preserveTerms` is a denylist of

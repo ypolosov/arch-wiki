@@ -1,5 +1,8 @@
 import { DomainError } from '../../domain/errors';
 import { render } from '../../domain/services/TemplateEngine';
+import { buildGraph, GraphSnapshot } from '../../domain/model/Graph';
+import { WikiPage } from '../../domain/model/WikiPage';
+import { confluencePageUrl } from '../../domain/services/ConfluenceTree';
 import { PayloadTemplatePort } from '../ports/PayloadTemplatePort';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
@@ -26,6 +29,15 @@ export interface RenderIssueDeps {
   hash: (content: string) => string;
 }
 
+/** A human-navigable link from the issue to the Confluence MIRROR page of an artifact. */
+export interface TraceLink {
+  /** Artifact id (e.g. QA-007 / ADR-0001), or null if the heading has none. */
+  id: string | null;
+  title: string;
+  /** Absolute (when confluence.siteUrl set) or root-relative `/wiki/…` page URL. */
+  url: string;
+}
+
 export interface IntentEnvelope {
   kind: IssueKind;
   role: string | null;
@@ -35,6 +47,13 @@ export interface IntentEnvelope {
   issueTitle: string;
   sourceId: string;
   drivers: string[];
+  /**
+   * Confluence-mirror links for the source artifact + the artifacts it references —
+   * for the issue's `## Источник` trace section. Presentation only (NOT in contentHash,
+   * so publishing/refreshing the mirror never drifts an already-created issue). Empty
+   * when Confluence is unconfigured or the targets are not yet mirrored.
+   */
+  traceLinks: TraceLink[];
   contentHash: string;
   payload: string;
   /** Idempotency: an issue for (sourceId, kind, role) already exists in the ledger. */
@@ -49,6 +68,63 @@ export interface IntentEnvelope {
 /** Strip a leading `ID: ` from a heading to get a clean title. */
 function cleanTitle(heading: string): string {
   return heading.replace(/^\s*[A-Za-z]+-\d+\S*:\s*/, '').trim();
+}
+
+/** Extract the artifact id from a heading (`ADR-0001: …` → `ADR-0001`), else null. */
+function idOf(heading: string | undefined): string | null {
+  if (!heading) return null;
+  const m = /^\s*([A-Za-z]+-\d+\S*?):/.exec(heading);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Resolve the issue's Confluence trace links: the source artifact's own mirror page plus
+ * each artifact it references (`## Related` wikilinks) that is already mirrored. Authority
+ * is the published-pages ledger (invariant 7); an unpublished target yields no link (the
+ * caller warns to publish first). Deterministic: insertion order is source-first, then the
+ * source's wikilinks in document order; deduped by url. Pure.
+ */
+function resolveTraceLinks(args: {
+  from: string;
+  title: string;
+  sourcePage: WikiPage | null;
+  graph: GraphSnapshot;
+  publishedMap: ReadonlyMap<string, string>;
+  space: string | null;
+  siteUrl: string | null;
+}): { traceLinks: TraceLink[]; warnings: string[] } {
+  const { from, title, sourcePage, graph, publishedMap, space, siteUrl } = args;
+  if (!space || !sourcePage) return { traceLinks: [], warnings: [] };
+  const warnings: string[] = [];
+  const byUrl = new Map<string, TraceLink>();
+  const add = (relPath: string, id: string | null, ttl: string): boolean => {
+    const pid = publishedMap.get(relPath);
+    if (!pid) return false;
+    const url = confluencePageUrl(siteUrl, space, pid);
+    if (!byUrl.has(url)) byUrl.set(url, { id, title: ttl, url });
+    return true;
+  };
+  if (!add(sourcePage.relPath, from, title)) {
+    warnings.push(`source ${from} is not yet mirrored to Confluence (no trace link); run /arch-wiki:publish first`);
+  }
+  for (const l of sourcePage.links) {
+    const tp = graph.byBasename.get(l.target);
+    if (tp && tp.relPath !== sourcePage.relPath) {
+      add(tp.relPath, idOf(tp.headings[0]), cleanTitle(tp.headings[0] ?? tp.basename));
+    }
+  }
+  const traceLinks = [...byUrl.values()];
+  if (siteUrl == null && traceLinks.length > 0) {
+    warnings.push(
+      'integrations.confluence.siteUrl not set — trace links are root-relative (resolve from Jira on the same Atlassian site; set siteUrl for absolute links)',
+    );
+  }
+  return { traceLinks, warnings };
+}
+
+/** Render trace links as a markdown bullet list for the `{{trace}}` template token. */
+function renderTraceMarkdown(links: TraceLink[]): string {
+  return links.map((l) => `- [${l.id ? `${l.id} — ` : ''}${l.title}](${l.url})`).join('\n');
 }
 
 /**
@@ -82,9 +158,23 @@ export async function renderIssuePayload(
 
   const basename = await repo.resolveBasename(from);
   if (!basename) throw new DomainError(`render-issue: cannot resolve --from "${from}"`, 2);
-  const page = (await repo.loadPages()).find((p) => p.basename === basename);
-  const title = page?.headings[0] ? cleanTitle(page.headings[0]) : basename;
+  const pages = await repo.loadPages();
+  const graph = buildGraph(pages);
+  const sourcePage = pages.find((p) => p.basename === basename) ?? null;
+  const title = sourcePage?.headings[0] ? cleanTitle(sourcePage.headings[0]) : basename;
   const driverLink = `[[${basename}|${from}]]`;
+
+  // CAP-2 trace links (v0.7): keep the issue body self-contained (inlined excerpts) AND add a
+  // navigable `## Источник` link to each artifact's Confluence mirror page. Presentation only.
+  const { traceLinks, warnings: traceWarnings } = resolveTraceLinks({
+    from,
+    title,
+    sourcePage,
+    graph,
+    publishedMap: new Map((await ledger.readPages()).map((r) => [r.source, r.page])),
+    space: config.confluence()?.space ?? null,
+    siteUrl: config.confluenceSiteUrl(),
+  });
 
   const templateName = input.kind === 'arch' ? 'issue-arch.md' : 'issue-techdesign.md';
   const template = await payloads.loadByName(templateName);
@@ -93,8 +183,12 @@ export async function renderIssuePayload(
     title,
     source: basename,
     driver: driverLink,
+    trace: renderTraceMarkdown(traceLinks),
   });
-  const warnings = unresolved.length ? [`unresolved template tokens: ${unresolved.join(', ')}`] : [];
+  const warnings = [
+    ...(unresolved.length ? [`unresolved template tokens: ${unresolved.join(', ')}`] : []),
+    ...traceWarnings,
+  ];
 
   // Hash a canonical field set (date-free) so re-rendering is stable; editing the
   // driver title changes the hash → drifted.
@@ -114,6 +208,7 @@ export async function renderIssuePayload(
     issueTitle: `${prefix} ${title}`,
     sourceId: from,
     drivers: [driverLink],
+    traceLinks,
     contentHash,
     payload: output,
     alreadyCreated: existing != null,

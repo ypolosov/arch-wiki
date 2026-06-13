@@ -1,0 +1,44 @@
+name: release-gate
+
+# Post-hoc safety net for the recurring empty/mispointed-tag bug (gt feedback P0).
+# CI on main/PR never runs against the TAG ref the marketplace installs from — so a tag
+# left on an old commit (stale dist / un-bumped version) was never caught. This job runs
+# AT the tag and goes red loudly if the tag does not match the code it points at.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  verify-tag:
+    name: tag matches version + fresh dist + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Versions agree across files AND match the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const tag = process.env.TAG.replace(/^v/, "");
+            const pkg = require("./package.json").version;
+            const man = require("./.claude-plugin/plugin.json").version;
+            const code = (fs.readFileSync("src/cli/version.ts","utf8").match(/(\d+\.\d+\.\d+)/)||[])[1];
+            const fail = (m) => { console.error("release-gate: " + m); process.exit(1); };
+            if (pkg  !== tag) fail("package.json " + pkg + " != tag " + tag);
+            if (man  !== tag) fail("plugin.json " + man + " != tag " + tag);
+            if (code !== tag) fail("src/cli/version.ts " + code + " != tag " + tag);
+            console.log("ok: package.json = plugin.json = version.ts = " + tag);
+          '
+      - run: npm run build
+      - name: dist/cli.cjs at the tag is a fresh build (no stale bundle shipped)
+        run: git diff --exit-code -- dist/cli.cjs
+      - name: Full test suite at the tag
+        run: npm test

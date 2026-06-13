@@ -10,10 +10,12 @@ import {
   ProtectedSpan,
   extractGlossaryTerms,
   isPageExcluded,
+  neutralizeRepoRelativeLinks,
   parentSourceOf,
   protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
+  splitTitle,
 } from '../../domain/services/ConfluenceTree';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
@@ -23,6 +25,10 @@ export interface PageEnvelope {
   source: string;
   basename: string;
   title: string;
+  /** Artifact id prefix of `title` (e.g. `UC-014:`), kept byte-exact in the RU projection. */
+  titlePrefix: string;
+  /** Translatable part of `title` (e.g. `Login`); publish translates only this, then recombines with `titlePrefix`. */
+  titleLabel: string;
   spaceId: string;
   /** Parent page's source relPath, or null for the root. */
   parentSource: string | null;
@@ -138,14 +144,20 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const envelopes = new Map<string, PageEnvelope>();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    const { body: englishBody, crossLinks } = resolveCrossLinks(
+    const { body: resolved, crossLinks } = resolveCrossLinks(
       normalizeBody(parsed.content),
       graph,
       publishedMap,
       includedSources,
       spaceId, // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
+      // Translation mode reserves a masked-link slot for not-yet-published targets so the
+      // translatable body is stable across the 2-pass publish (no re-translation on pass 2).
+      language != null,
     );
+    // Repo-relative md links (../iterations/, CLAUDE.md …) are dead hrefs in Confluence → plain text.
+    const { body: englishBody, stripped } = neutralizeRepoRelativeLinks(resolved);
     const title = titleOf(p);
+    const { prefix: titlePrefix, label: titleLabel } = splitTitle(title);
     const parentSource = parents.get(p.relPath) ?? null;
     // Hash over the ENGLISH source (+ language when translating). Stable across runs
     // (translation is not in the key → no oscillation); a non-translating wiki keeps the
@@ -160,13 +172,23 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       ? protectStructuralSpans(englishBody)
       : { masked: englishBody, restore: [] as ProtectedSpan[] };
     const alreadyPublished = publishedMap.has(p.relPath);
-    const warnings = crossLinks.some((c) => !c.resolved)
-      ? ['some cross-link targets are not yet published (rendered as plain text)']
-      : [];
+    const warnings: string[] = [];
+    if (crossLinks.some((c) => !c.resolved)) {
+      warnings.push(
+        language != null
+          ? 'some cross-link targets are not yet published (reserved as pending links; resolve on pass 2)'
+          : 'some cross-link targets are not yet published (rendered as plain text)',
+      );
+    }
+    if (stripped.length > 0) {
+      warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(', ')}`);
+    }
     envelopes.set(p.relPath, {
       source: p.relPath,
       basename: p.basename,
       title,
+      titlePrefix,
+      titleLabel,
       spaceId,
       parentSource,
       language,

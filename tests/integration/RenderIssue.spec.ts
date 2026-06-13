@@ -16,15 +16,22 @@ const PAYLOADS = path.resolve(__dirname, '../../templates/payloads');
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 const clock = { now: () => new Date('2026-06-08T00:00:00Z') };
 
-const CONFIG = ProjectConfig.from(
+const TASKS = {
+  language: 'ru',
+  prefixes: { arch: '[Arch]', techdesign: '[Techdesign]' },
+  rolePrefixes: { be: '[BE][Techdesign]', fe: '[FE][Techdesign]', do: '[DO][Techdesign]' },
+};
+const CONFIG = ProjectConfig.from(ProjectConfigSchema.parse({ tasks: TASKS }));
+const CONFIG_CF = ProjectConfig.from(
   ProjectConfigSchema.parse({
-    tasks: {
-      language: 'ru',
-      prefixes: { arch: '[Arch]', techdesign: '[Techdesign]' },
-      rolePrefixes: { be: '[BE][Techdesign]', fe: '[FE][Techdesign]', do: '[DO][Techdesign]' },
-    },
+    tasks: TASKS,
+    integrations: { confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net' } },
   }),
 );
+const CONFIG_CF_NOSITE = ProjectConfig.from(
+  ProjectConfigSchema.parse({ tasks: TASKS, integrations: { confluence: { space: 'PP' } } }),
+);
+const SOURCE_REL = 'drivers/quality-attributes/QA-001-latency.md';
 
 async function tmpRoot(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'aw-ri-'));
@@ -125,5 +132,47 @@ describe('renderIssuePayload + recordIssue (integration)', () => {
     await expect(renderIssuePayload({ from: 'QA-001', kind: 'arch' }, d)).rejects.toMatchObject({
       exitCode: 2,
     });
+  });
+
+  // v0.7: issue → Confluence mirror trace links (self-contained body + a `## Источник` link).
+  it('adds an absolute Confluence trace link when the source is mirrored (siteUrl set)', async () => {
+    const root = await tmpRoot();
+    const d = { ...deps(root), config: CONFIG_CF };
+    await d.ledger.appendPage({ source: SOURCE_REL, page: '555', contentHash: 'h', publishedAt: '2026-01-01T00:00:00Z', system: 'confluence' });
+    const env = await renderIssuePayload({ from: 'QA-001', kind: 'arch' }, d);
+    expect(env.traceLinks).toEqual([
+      { id: 'QA-001', title: 'Latency', url: 'https://acme.atlassian.net/wiki/spaces/PP/pages/555' },
+    ]);
+    expect(env.payload).toContain('[QA-001 — Latency](https://acme.atlassian.net/wiki/spaces/PP/pages/555)');
+  });
+
+  it('falls back to a root-relative trace link + warning when siteUrl is absent', async () => {
+    const root = await tmpRoot();
+    const d = { ...deps(root), config: CONFIG_CF_NOSITE };
+    await d.ledger.appendPage({ source: SOURCE_REL, page: '555', contentHash: 'h', publishedAt: '2026-01-01T00:00:00Z', system: 'confluence' });
+    const env = await renderIssuePayload({ from: 'QA-001', kind: 'arch' }, d);
+    expect(env.traceLinks).toEqual([{ id: 'QA-001', title: 'Latency', url: '/wiki/spaces/PP/pages/555' }]);
+    expect(env.warnings.some((w) => w.includes('siteUrl'))).toBe(true);
+  });
+
+  it('warns + no trace link when the source is not mirrored; trace links are NOT in contentHash', async () => {
+    const root = await tmpRoot();
+    const d = { ...deps(root), config: CONFIG_CF };
+    const unpub = await renderIssuePayload({ from: 'QA-001', kind: 'arch' }, d);
+    expect(unpub.traceLinks).toEqual([]);
+    expect(unpub.warnings.some((w) => w.includes('not yet mirrored'))).toBe(true);
+    // Publish the source, re-render: a link appears, but the contentHash is unchanged
+    // (presentation only → publishing the mirror never drifts an already-created issue).
+    await d.ledger.appendPage({ source: SOURCE_REL, page: '555', contentHash: 'h', publishedAt: '2026-01-01T00:00:00Z', system: 'confluence' });
+    const pub = await renderIssuePayload({ from: 'QA-001', kind: 'arch' }, d);
+    expect(pub.traceLinks).toHaveLength(1);
+    expect(pub.contentHash).toBe(unpub.contentHash);
+  });
+
+  it('no Confluence config → no trace links, no warning (silent)', async () => {
+    const root = await tmpRoot();
+    const env = await renderIssuePayload({ from: 'QA-001', kind: 'arch' }, deps(root));
+    expect(env.traceLinks).toEqual([]);
+    expect(env.warnings).toEqual([]);
   });
 });

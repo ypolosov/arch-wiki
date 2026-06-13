@@ -102,6 +102,16 @@ export class ProjectConfig {
     return this.cfg.integrations?.confluence ?? null;
   }
 
+  /**
+   * OPTIONAL. The Atlassian site base URL for ABSOLUTE Confluence links in Jira issues
+   * (issue→mirror trace). Null = build root-relative /wiki links instead (caller warns).
+   * Trailing slash stripped so callers can append `/wiki/...` safely.
+   */
+  confluenceSiteUrl(): string | null {
+    const u = this.cfg.integrations?.confluence?.siteUrl;
+    return u ? u.replace(/\/+$/, '') : null;
+  }
+
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
   userStoryLog(): NonNullable<
     NonNullable<NonNullable<ProjectConfigFile['integrations']>['upstream']>['userStoryLog']

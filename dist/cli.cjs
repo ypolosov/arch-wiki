@@ -8664,6 +8664,12 @@ var IntegrationsSchema = external_exports.object({
   confluence: external_exports.object({
     space: external_exports.string(),
     cloudId: external_exports.string(),
+    // CAP-2 (v0.7): the Atlassian site base URL (e.g. https://acme.atlassian.net).
+    // Used to build ABSOLUTE Confluence links inside Jira issues (issue→mirror trace,
+    // render-issue) — Jira ADF wants an absolute href; cloudId is a UUID, not the host.
+    // Absent → render-issue emits root-relative /wiki links (work from Jira on the same
+    // site, but absolute is preferred). The in-Confluence mirror itself stays root-relative.
+    siteUrl: external_exports.string().url(),
     // CAP-2 RU projection (v0.6, plan §13): when `language` is set the mirror is a
     // translated PRESENTATION projection (canon stays English in Layer-2). Absent →
     // publish English as-is (backward-compatible). `preserveTerms` is a denylist of
@@ -8908,6 +8914,15 @@ var ProjectConfig = class _ProjectConfig {
   /** OPTIONAL. Returns null; the CALLER fails fast when it actually needs Confluence (publish). */
   confluence() {
     return this.cfg.integrations?.confluence ?? null;
+  }
+  /**
+   * OPTIONAL. The Atlassian site base URL for ABSOLUTE Confluence links in Jira issues
+   * (issue→mirror trace). Null = build root-relative /wiki links instead (caller warns).
+   * Trailing slash stripped so callers can append `/wiki/...` safely.
+   */
+  confluenceSiteUrl() {
+    const u = this.cfg.integrations?.confluence?.siteUrl;
+    return u ? u.replace(/\/+$/, "") : null;
   }
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
   userStoryLog() {
@@ -9250,11 +9265,212 @@ async function parseQuestionnaire(input, deps) {
   return { source: from, method, relatedDrivers, answers, unanswered, contradictions };
 }
 
+// src/domain/model/WikiPage.ts
+var FOLDER_TO_KIND = {};
+for (const k of Object.keys(ARTIFACT_SPECS)) {
+  FOLDER_TO_KIND[ARTIFACT_SPECS[k].folder] = k;
+}
+function kindOfPage(page) {
+  return FOLDER_TO_KIND[page.folder] ?? null;
+}
+function kindOfRelPath(relPath) {
+  const folder = relPath.includes("/") ? relPath.replace(/\/[^/]+$/, "") : "";
+  return FOLDER_TO_KIND[folder] ?? null;
+}
+
+// src/domain/model/Graph.ts
+function buildGraph(pages) {
+  const byBasename = /* @__PURE__ */ new Map();
+  for (const p of pages) byBasename.set(p.basename, p);
+  return { pages, byBasename };
+}
+function inboundCounts(g) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const p of g.pages) {
+    for (const l of p.links) counts.set(l.target, (counts.get(l.target) ?? 0) + 1);
+  }
+  return counts;
+}
+function pagesOfKind(g, kinds) {
+  const set = new Set(kinds);
+  return g.pages.filter((p) => {
+    const k = kindOfPage(p);
+    return k != null && set.has(k);
+  });
+}
+
+// src/domain/services/ConfluenceTree.ts
+var DEFAULT_EXCLUDE = {
+  statuses: ["proposed", "rejected"],
+  basenames: ["risks", "gap-analysis", "kanban"]
+};
+var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+function isPageExcluded(page, exclude) {
+  const fm = page.frontmatter;
+  if (fm.confluence === true) return false;
+  if (fm.confluence === false || fm.audience === "internal") return true;
+  if (exclude.basenames.includes(page.basename)) return true;
+  if (kindOfPage(page) === "adr") {
+    const st = String(fm.status ?? "").toLowerCase();
+    if (st && exclude.statuses.includes(st)) return true;
+  }
+  return false;
+}
+function parentSourceOf(page, hubMap, includedSources, indexSource) {
+  if (page.relPath === indexSource) return null;
+  const kind = kindOfPage(page);
+  if (kind && kind !== "arc42") {
+    const hub = hubMap.get(kind) ?? null;
+    if (hub && hub !== page.relPath && includedSources.has(hub)) return hub;
+  }
+  return indexSource && indexSource !== page.relPath ? indexSource : null;
+}
+function depthOf(relPath, parents) {
+  let depth = 0;
+  let cur = parents.get(relPath) ?? null;
+  const seen = /* @__PURE__ */ new Set([relPath]);
+  while (cur != null && !seen.has(cur)) {
+    seen.add(cur);
+    depth += 1;
+    cur = parents.get(cur) ?? null;
+  }
+  return depth;
+}
+function sortParentFirst(relPaths, parents) {
+  return [...relPaths].sort(
+    (a, b) => depthOf(a, parents) - depthOf(b, parents) || a.localeCompare(b)
+  );
+}
+var PENDING_PAGE_ID = "pending";
+function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey, reserveUnresolved = false) {
+  const crossLinks = [];
+  const body = content.replace(WIKILINK_RE, (_m, _bang, target, alias) => {
+    const label = (alias ?? target).trim();
+    const page = g.byBasename.get(target);
+    const included = page ? includedSources.has(page.relPath) : false;
+    const pageId = included ? publishedMap.get(page.relPath) : void 0;
+    if (pageId) {
+      crossLinks.push({ target, resolved: true, pageId });
+      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+    }
+    if (reserveUnresolved && included) {
+      crossLinks.push({ target, resolved: false });
+      return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
+    }
+    crossLinks.push({ target, resolved: false });
+    return label;
+  });
+  return { body, crossLinks };
+}
+function splitTitle(title) {
+  const m = /^\s*([A-Za-z]+-\d+\S*:)\s*(.*)$/.exec(title);
+  if (m) return { prefix: m[1], label: m[2].trim() };
+  return { prefix: "", label: title.trim() };
+}
+var KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
+var MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
+function neutralizeRepoRelativeLinks(content) {
+  const stripped = [];
+  const body = content.replace(MD_LINK_RE, (m, label, url) => {
+    if (KEEP_LINK_URL.test(url)) return m;
+    stripped.push(url);
+    return label;
+  });
+  return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
+}
+function confluencePageUrl(siteUrl, spaceKey, pageId) {
+  const base = siteUrl ? siteUrl.replace(/\/+$/, "") : "";
+  return `${base}/wiki/spaces/${spaceKey}/pages/${pageId}`;
+}
+var PROTECT_PREFIX = "%%AWP";
+var PROTECT_SUFFIX = "%%";
+var STRUCTURAL_PATTERNS = [
+  /```[\s\S]*?```/g,
+  // fenced code blocks
+  /`[^`\n]+`/g,
+  // inline code
+  /(?<=\]\()[^)\s]+(?=\))/g,
+  // markdown/image link URL
+  /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g
+  // artifact-id tokens
+];
+function protectStructuralSpans(body) {
+  const restore = [];
+  let masked = body;
+  let n = 0;
+  for (const re of STRUCTURAL_PATTERNS) {
+    masked = masked.replace(re, (m) => {
+      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
+      n += 1;
+      restore.push({ token, original: m });
+      return token;
+    });
+  }
+  return { masked, restore };
+}
+function applyRestore(text, restore) {
+  let body = text;
+  const missing = [];
+  for (const { token, original } of restore) {
+    if (!body.includes(token)) {
+      missing.push(token);
+      continue;
+    }
+    body = body.split(token).join(original);
+  }
+  return { body, missing };
+}
+function extractGlossaryTerms(glossaryMarkdown) {
+  const terms = /* @__PURE__ */ new Set();
+  for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
+    const t = m[1].trim();
+    if (t) terms.add(t);
+  }
+  return [...terms].sort((a, b) => a.localeCompare(b));
+}
+
 // src/application/usecases/RenderIssuePayload.ts
 var ISSUE_KINDS = ["arch", "techdesign"];
 var ISSUE_ROLES = ["be", "fe", "do"];
 function cleanTitle(heading) {
   return heading.replace(/^\s*[A-Za-z]+-\d+\S*:\s*/, "").trim();
+}
+function idOf(heading) {
+  if (!heading) return null;
+  const m = /^\s*([A-Za-z]+-\d+\S*?):/.exec(heading);
+  return m ? m[1] : null;
+}
+function resolveTraceLinks(args) {
+  const { from, title, sourcePage, graph, publishedMap, space, siteUrl } = args;
+  if (!space || !sourcePage) return { traceLinks: [], warnings: [] };
+  const warnings = [];
+  const byUrl = /* @__PURE__ */ new Map();
+  const add = (relPath, id, ttl) => {
+    const pid = publishedMap.get(relPath);
+    if (!pid) return false;
+    const url = confluencePageUrl(siteUrl, space, pid);
+    if (!byUrl.has(url)) byUrl.set(url, { id, title: ttl, url });
+    return true;
+  };
+  if (!add(sourcePage.relPath, from, title)) {
+    warnings.push(`source ${from} is not yet mirrored to Confluence (no trace link); run /arch-wiki:publish first`);
+  }
+  for (const l of sourcePage.links) {
+    const tp = graph.byBasename.get(l.target);
+    if (tp && tp.relPath !== sourcePage.relPath) {
+      add(tp.relPath, idOf(tp.headings[0]), cleanTitle(tp.headings[0] ?? tp.basename));
+    }
+  }
+  const traceLinks = [...byUrl.values()];
+  if (siteUrl == null && traceLinks.length > 0) {
+    warnings.push(
+      "integrations.confluence.siteUrl not set \u2014 trace links are root-relative (resolve from Jira on the same Atlassian site; set siteUrl for absolute links)"
+    );
+  }
+  return { traceLinks, warnings };
+}
+function renderTraceMarkdown(links) {
+  return links.map((l) => `- [${l.id ? `${l.id} \u2014 ` : ""}${l.title}](${l.url})`).join("\n");
 }
 async function renderIssuePayload(input, deps) {
   const { repo, payloads, config, ledger, hash } = deps;
@@ -9274,18 +9490,33 @@ async function renderIssuePayload(input, deps) {
   const language = config.language();
   const basename2 = await repo.resolveBasename(from);
   if (!basename2) throw new DomainError(`render-issue: cannot resolve --from "${from}"`, 2);
-  const page = (await repo.loadPages()).find((p) => p.basename === basename2);
-  const title = page?.headings[0] ? cleanTitle(page.headings[0]) : basename2;
+  const pages = await repo.loadPages();
+  const graph = buildGraph(pages);
+  const sourcePage = pages.find((p) => p.basename === basename2) ?? null;
+  const title = sourcePage?.headings[0] ? cleanTitle(sourcePage.headings[0]) : basename2;
   const driverLink = `[[${basename2}|${from}]]`;
+  const { traceLinks, warnings: traceWarnings } = resolveTraceLinks({
+    from,
+    title,
+    sourcePage,
+    graph,
+    publishedMap: new Map((await ledger.readPages()).map((r) => [r.source, r.page])),
+    space: config.confluence()?.space ?? null,
+    siteUrl: config.confluenceSiteUrl()
+  });
   const templateName = input.kind === "arch" ? "issue-arch.md" : "issue-techdesign.md";
   const template = await payloads.loadByName(templateName);
   const { output, unresolved } = render(template, {
     prefix,
     title,
     source: basename2,
-    driver: driverLink
+    driver: driverLink,
+    trace: renderTraceMarkdown(traceLinks)
   });
-  const warnings = unresolved.length ? [`unresolved template tokens: ${unresolved.join(", ")}`] : [];
+  const warnings = [
+    ...unresolved.length ? [`unresolved template tokens: ${unresolved.join(", ")}`] : [],
+    ...traceWarnings
+  ];
   const canonical = JSON.stringify({ kind: input.kind, role, prefix, language, title, source: basename2, drivers: [driverLink] });
   const contentHash = hash(canonical);
   const existing = (await ledger.readIssues()).find(
@@ -9300,6 +9531,7 @@ async function renderIssuePayload(input, deps) {
     issueTitle: `${prefix} ${title}`,
     sourceId: from,
     drivers: [driverLink],
+    traceLinks,
     contentHash,
     payload: output,
     alreadyCreated: existing != null,
@@ -9352,40 +9584,6 @@ async function recordIssue(input, deps) {
     }
   }
   return { key, ledgerAppended, frontmatterUpdated, path: pagePath };
-}
-
-// src/domain/model/WikiPage.ts
-var FOLDER_TO_KIND = {};
-for (const k of Object.keys(ARTIFACT_SPECS)) {
-  FOLDER_TO_KIND[ARTIFACT_SPECS[k].folder] = k;
-}
-function kindOfPage(page) {
-  return FOLDER_TO_KIND[page.folder] ?? null;
-}
-function kindOfRelPath(relPath) {
-  const folder = relPath.includes("/") ? relPath.replace(/\/[^/]+$/, "") : "";
-  return FOLDER_TO_KIND[folder] ?? null;
-}
-
-// src/domain/model/Graph.ts
-function buildGraph(pages) {
-  const byBasename = /* @__PURE__ */ new Map();
-  for (const p of pages) byBasename.set(p.basename, p);
-  return { pages, byBasename };
-}
-function inboundCounts(g) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const p of g.pages) {
-    for (const l of p.links) counts.set(l.target, (counts.get(l.target) ?? 0) + 1);
-  }
-  return counts;
-}
-function pagesOfKind(g, kinds) {
-  const set = new Set(kinds);
-  return g.pages.filter((p) => {
-    const k = kindOfPage(p);
-    return k != null && set.has(k);
-  });
 }
 
 // src/application/usecases/Trace.ts
@@ -9527,110 +9725,6 @@ async function pruneStorySnapshots(livePageIds, deps, options2 = {}) {
   };
 }
 
-// src/domain/services/ConfluenceTree.ts
-var DEFAULT_EXCLUDE = {
-  statuses: ["proposed", "rejected"],
-  basenames: ["risks", "gap-analysis", "kanban"]
-};
-var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
-function isPageExcluded(page, exclude) {
-  const fm = page.frontmatter;
-  if (fm.confluence === true) return false;
-  if (fm.confluence === false || fm.audience === "internal") return true;
-  if (exclude.basenames.includes(page.basename)) return true;
-  if (kindOfPage(page) === "adr") {
-    const st = String(fm.status ?? "").toLowerCase();
-    if (st && exclude.statuses.includes(st)) return true;
-  }
-  return false;
-}
-function parentSourceOf(page, hubMap, includedSources, indexSource) {
-  if (page.relPath === indexSource) return null;
-  const kind = kindOfPage(page);
-  if (kind && kind !== "arc42") {
-    const hub = hubMap.get(kind) ?? null;
-    if (hub && hub !== page.relPath && includedSources.has(hub)) return hub;
-  }
-  return indexSource && indexSource !== page.relPath ? indexSource : null;
-}
-function depthOf(relPath, parents) {
-  let depth = 0;
-  let cur = parents.get(relPath) ?? null;
-  const seen = /* @__PURE__ */ new Set([relPath]);
-  while (cur != null && !seen.has(cur)) {
-    seen.add(cur);
-    depth += 1;
-    cur = parents.get(cur) ?? null;
-  }
-  return depth;
-}
-function sortParentFirst(relPaths, parents) {
-  return [...relPaths].sort(
-    (a, b) => depthOf(a, parents) - depthOf(b, parents) || a.localeCompare(b)
-  );
-}
-function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey) {
-  const crossLinks = [];
-  const body = content.replace(WIKILINK_RE, (_m, _bang, target, alias) => {
-    const label = (alias ?? target).trim();
-    const page = g.byBasename.get(target);
-    const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : void 0;
-    if (pageId) {
-      crossLinks.push({ target, resolved: true, pageId });
-      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
-    }
-    crossLinks.push({ target, resolved: false });
-    return label;
-  });
-  return { body, crossLinks };
-}
-var PROTECT_PREFIX = "%%AWP";
-var PROTECT_SUFFIX = "%%";
-var STRUCTURAL_PATTERNS = [
-  /```[\s\S]*?```/g,
-  // fenced code blocks
-  /`[^`\n]+`/g,
-  // inline code
-  /(?<=\]\()[^)\s]+(?=\))/g,
-  // markdown/image link URL
-  /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g
-  // artifact-id tokens
-];
-function protectStructuralSpans(body) {
-  const restore = [];
-  let masked = body;
-  let n = 0;
-  for (const re of STRUCTURAL_PATTERNS) {
-    masked = masked.replace(re, (m) => {
-      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
-      n += 1;
-      restore.push({ token, original: m });
-      return token;
-    });
-  }
-  return { masked, restore };
-}
-function applyRestore(text, restore) {
-  let body = text;
-  const missing = [];
-  for (const { token, original } of restore) {
-    if (!body.includes(token)) {
-      missing.push(token);
-      continue;
-    }
-    body = body.split(token).join(original);
-  }
-  return { body, missing };
-}
-function extractGlossaryTerms(glossaryMarkdown) {
-  const terms = /* @__PURE__ */ new Set();
-  for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
-    const t = m[1].trim();
-    if (t) terms.add(t);
-  }
-  return [...terms].sort((a, b) => a.localeCompare(b));
-}
-
 // src/application/usecases/RenderConfluencePayload.ts
 function normalizeBody2(s) {
   return `${s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/, "")}
@@ -9685,15 +9779,20 @@ async function renderConfluencePayload(deps) {
   const envelopes = /* @__PURE__ */ new Map();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    const { body: englishBody, crossLinks } = resolveCrossLinks(
+    const { body: resolved, crossLinks } = resolveCrossLinks(
       normalizeBody2(parsed.content),
       graph,
       publishedMap,
       includedSources,
-      spaceId
+      spaceId,
       // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
+      // Translation mode reserves a masked-link slot for not-yet-published targets so the
+      // translatable body is stable across the 2-pass publish (no re-translation on pass 2).
+      language != null
     );
+    const { body: englishBody, stripped } = neutralizeRepoRelativeLinks(resolved);
     const title = titleOf(p);
+    const { prefix: titlePrefix, label: titleLabel } = splitTitle(title);
     const parentSource = parents.get(p.relPath) ?? null;
     const contentHash = deps.hash(
       JSON.stringify(
@@ -9702,11 +9801,21 @@ async function renderConfluencePayload(deps) {
     );
     const { masked, restore } = language ? protectStructuralSpans(englishBody) : { masked: englishBody, restore: [] };
     const alreadyPublished = publishedMap.has(p.relPath);
-    const warnings = crossLinks.some((c) => !c.resolved) ? ["some cross-link targets are not yet published (rendered as plain text)"] : [];
+    const warnings = [];
+    if (crossLinks.some((c) => !c.resolved)) {
+      warnings.push(
+        language != null ? "some cross-link targets are not yet published (reserved as pending links; resolve on pass 2)" : "some cross-link targets are not yet published (rendered as plain text)"
+      );
+    }
+    if (stripped.length > 0) {
+      warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(", ")}`);
+    }
     envelopes.set(p.relPath, {
       source: p.relPath,
       basename: p.basename,
       title,
+      titlePrefix,
+      titleLabel,
       spaceId,
       parentSource,
       language,
@@ -10544,7 +10653,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.6.0";
+var PLUGIN_VERSION = "0.7.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

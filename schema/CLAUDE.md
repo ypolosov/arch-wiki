@@ -172,9 +172,20 @@ pass them as `${ENV}`. Commands that need one (`render-issue`, `publish`) first
 **Confluence mirror language (`/arch-wiki:publish`).** By default the mirror is published in English
 (the wiki canon). Set `integrations.confluence.language` (e.g. `"ru"`) to publish a TRANSLATED
 projection: the canon stays English in `docs/architecture/**`, and `publish` translates prose / headings /
-link-labels at publish time while Core protects structural spans (code, link URLs, artifact ids) and keeps
-every term in `integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — verbatim.
-The content hash is over the English source, so a translated mirror never drifts on its own.
+link-labels **and the page title** (label only — the `UC-014:` id prefix stays byte-exact) at publish time
+while Core protects structural spans (code, link URLs, artifact ids) and keeps every term in
+`integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — verbatim. The content
+hash is over the English source, so a translated mirror never drifts on its own; a not-yet-published
+cross-link is reserved as a `…/pages/pending` masked link so the translation is reused across the 2-pass
+publish (not re-translated). Repo-relative links (`../iterations/`, `CLAUDE.md`) are dead in Confluence →
+Core neutralizes them to plain text.
+
+**Issue → mirror trace (`/arch-wiki:issue`).** The issue body stays self-contained (inlined excerpts); a
+`## Источник` section links each referenced artifact to its Confluence mirror page (from the published-pages
+ledger — the human-navigable trace; the ledger + `realized_by` frontmatter remain the machine trace). Set
+`integrations.confluence.siteUrl` (e.g. `https://acme.atlassian.net`) for absolute links; absent →
+root-relative `/wiki/…` (resolves from Jira on the same Atlassian site). Publish the mirror first so the
+targets have page-ids — an unmirrored target yields no link (a warning, not a failure).
 
 **Foam MCP** and **LikeC4 MCP** are **read-only navigation aids** (Foam: wikilinks /
 backlinks / tags graph; LikeC4: `read-project-summary` / `search-element` /
