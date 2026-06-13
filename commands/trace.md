@@ -15,3 +15,6 @@ This is almost purely deterministic — the CLI computes the chain; you only nar
    raw/notes-2026.md via a QAW questionnaire, decided by ADR-0012, realized by
    GRM-431." Flag any `exists:false` raw source or `stale:true` issue as a problem.
 3. Do not recompute anything — report exactly what the CLI returned.
+4. (Optional) You MAY cross-check related notes via the read-only **Foam MCP** for
+   color, but the reported chain is exactly what `arch-wiki trace` returned — Foam is
+   never authoritative.

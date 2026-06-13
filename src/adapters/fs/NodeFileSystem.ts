@@ -21,6 +21,10 @@ export class NodeFileSystem implements FileSystemPort {
     await fs.writeFile(absPath, content, 'utf8');
   }
 
+  async remove(absPath: string): Promise<void> {
+    await fs.rm(absPath, { force: true });
+  }
+
   async list(absDir: string): Promise<string[]> {
     try {
       return await fs.readdir(absDir);

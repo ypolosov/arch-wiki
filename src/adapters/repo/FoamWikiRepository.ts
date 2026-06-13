@@ -29,7 +29,15 @@ export class FoamWikiRepository implements WikiRepositoryPort {
   }
 
   async readLintBaseline(): Promise<string[]> {
-    const f = this.abs('.arch-wiki/lint-baseline.json');
+    return this.readBaselineFile('.arch-wiki/lint-baseline.json');
+  }
+
+  async readC4Baseline(): Promise<string[]> {
+    return this.readBaselineFile('.arch-wiki/c4-baseline.json');
+  }
+
+  private async readBaselineFile(relPath: string): Promise<string[]> {
+    const f = this.abs(relPath);
     if (!(await this.fs.exists(f))) return [];
     try {
       const parsed = JSON.parse(await this.fs.readFile(f));
@@ -119,6 +127,10 @@ export class FoamWikiRepository implements WikiRepositoryPort {
 
   async write(relPath: string, content: string): Promise<void> {
     await this.fs.writeFile(this.abs(relPath), content);
+  }
+
+  async deleteFile(relPath: string): Promise<void> {
+    await this.fs.remove(this.abs(relPath));
   }
 
   async read(relPath: string): Promise<string> {

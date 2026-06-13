@@ -4121,6 +4121,9 @@ var NodeFileSystem = class {
     await import_node_fs.promises.mkdir(path.dirname(absPath), { recursive: true });
     await import_node_fs.promises.writeFile(absPath, content, "utf8");
   }
+  async remove(absPath) {
+    await import_node_fs.promises.rm(absPath, { force: true });
+  }
   async list(absDir) {
     try {
       return await import_node_fs.promises.readdir(absDir);
@@ -4439,7 +4442,13 @@ var FoamWikiRepository = class {
     return path4.join(this.root, relPath);
   }
   async readLintBaseline() {
-    const f = this.abs(".arch-wiki/lint-baseline.json");
+    return this.readBaselineFile(".arch-wiki/lint-baseline.json");
+  }
+  async readC4Baseline() {
+    return this.readBaselineFile(".arch-wiki/c4-baseline.json");
+  }
+  async readBaselineFile(relPath) {
+    const f = this.abs(relPath);
     if (!await this.fs.exists(f)) return [];
     try {
       const parsed = JSON.parse(await this.fs.readFile(f));
@@ -4518,6 +4527,9 @@ var FoamWikiRepository = class {
   }
   async write(relPath, content) {
     await this.fs.writeFile(this.abs(relPath), content);
+  }
+  async deleteFile(relPath) {
+    await this.fs.remove(this.abs(relPath));
   }
   async read(relPath) {
     return this.fs.readFile(this.abs(relPath));
@@ -8616,11 +8628,17 @@ var ArtifactKindEnum = external_exports.enum([
   "arc42"
 ]);
 var Arc42MapSchema = external_exports.record(ArtifactKindEnum, external_exports.string().min(1)).optional();
+var C4ConsistencySchema = external_exports.object({
+  requireDocumentation: external_exports.array(external_exports.string().min(1)).optional(),
+  severity: external_exports.enum(["high", "medium", "low"]).optional(),
+  ignore: external_exports.array(external_exports.string().min(1)).optional()
+}).strict().optional();
 var C4Schema = external_exports.object({
   dir: external_exports.string().min(1),
   validate: external_exports.string().min(1),
   build: external_exports.string().min(1).optional(),
-  export: external_exports.string().min(1).optional()
+  export: external_exports.string().min(1).optional(),
+  consistency: C4ConsistencySchema
 }).strict().optional();
 var TaskKindEnum = external_exports.enum(["arch", "techdesign"]);
 var TasksSchema = external_exports.object({
@@ -8634,9 +8652,26 @@ var RequiredSectionSchema = external_exports.object({
   severity: external_exports.enum(["high", "medium", "low"]).default("medium")
 }).strict();
 var RequiredSectionsSchema = external_exports.record(ArtifactKindEnum, external_exports.array(RequiredSectionSchema)).optional();
+var UpstreamSchema = external_exports.object({
+  userStoryLog: external_exports.object({
+    cloudId: external_exports.string().min(1),
+    pageId: external_exports.string().min(1),
+    childTitlePrefix: external_exports.string().min(1).optional()
+  }).strict().optional()
+}).strict().optional();
 var IntegrationsSchema = external_exports.object({
   jira: external_exports.object({ board: external_exports.string(), projectKey: external_exports.string() }).partial().strict().optional(),
-  confluence: external_exports.object({ space: external_exports.string() }).partial().strict().optional(),
+  confluence: external_exports.object({
+    space: external_exports.string(),
+    cloudId: external_exports.string(),
+    // CAP-2 visibility filter: ADR statuses + register basenames hidden from the
+    // stakeholder mirror (per-page frontmatter `confluence`/`audience` overrides).
+    exclude: external_exports.object({
+      statuses: external_exports.array(external_exports.string().min(1)).optional(),
+      basenames: external_exports.array(external_exports.string().min(1)).optional()
+    }).strict().optional()
+  }).partial().strict().optional(),
+  upstream: UpstreamSchema,
   notifications: external_exports.object({
     channel: external_exports.enum(["discord", "slack", "none"]).default("none"),
     channelId: external_exports.string().optional()
@@ -8686,6 +8721,7 @@ var FileProjectConfigStore = class {
 var path7 = __toESM(require("node:path"));
 var ISSUES_FILE = "created-issues.json";
 var PAGES_FILE = "published-pages.json";
+var PULLED_FILE = "pulled-sources.json";
 var SCHEMA_VERSION = 1;
 var FileLedgerStore = class {
   constructor(root, fs2) {
@@ -8724,10 +8760,46 @@ var FileLedgerStore = class {
   }
   async appendPage(row) {
     const rows = await this.readPages();
-    if (rows.some((r) => r.page === row.page && r.source === row.source)) return false;
-    rows.push(row);
+    const idx = rows.findIndex((r) => r.page === row.page && r.source === row.source);
+    if (idx >= 0) {
+      if (rows[idx].contentHash === row.contentHash) return false;
+      rows[idx] = row;
+    } else {
+      rows.push(row);
+    }
     rows.sort((a, b) => a.page.localeCompare(b.page));
     await this.writeArray(PAGES_FILE, "pages", rows);
+    return true;
+  }
+  async removePage(source) {
+    const rows = await this.readPages();
+    const next = rows.filter((r) => r.source !== source);
+    if (next.length === rows.length) return false;
+    await this.writeArray(PAGES_FILE, "pages", next);
+    return true;
+  }
+  async readPulled() {
+    return this.readArray(PULLED_FILE, "pulled");
+  }
+  async appendPulled(row) {
+    const rows = await this.readPulled();
+    const idx = rows.findIndex((r) => r.pageId === row.pageId);
+    if (idx >= 0) {
+      const cur = rows[idx];
+      if (cur.contentHash === row.contentHash && cur.relPath === row.relPath) return false;
+      rows[idx] = row;
+    } else {
+      rows.push(row);
+    }
+    rows.sort((a, b) => a.pageId.localeCompare(b.pageId));
+    await this.writeArray(PULLED_FILE, "pulled", rows);
+    return true;
+  }
+  async removePulled(pageId) {
+    const rows = await this.readPulled();
+    const next = rows.filter((r) => r.pageId !== pageId);
+    if (next.length === rows.length) return false;
+    await this.writeArray(PULLED_FILE, "pulled", next);
     return true;
   }
 };
@@ -8786,6 +8858,20 @@ var ProjectConfig = class _ProjectConfig {
     }
     return this.cfg.c4;
   }
+  /**
+   * OPTIONAL+default. The C4↔wiki consistency policy for `validate-c4`. Never
+   * throws — validate-c4 works with sensible defaults even without a [c4] block
+   * (the model arrives via --model-json, not from c4().dir). Default keeps the
+   * check low-noise: only `system`+`container` elements must be documented.
+   */
+  c4Consistency() {
+    const c = this.cfg.c4?.consistency;
+    return {
+      requireDocumentation: c?.requireDocumentation ?? ["system", "container"],
+      severity: c?.severity ?? "medium",
+      ignore: c?.ignore ?? []
+    };
+  }
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent (no guess). */
   taskPrefix(kind, role) {
     const t = this.cfg.tasks;
@@ -8805,9 +8891,28 @@ var ProjectConfig = class _ProjectConfig {
     if (!l) throw new DomainError("project has no [tasks.language]; required by render-issue", 2);
     return l;
   }
+  /** OPTIONAL. The wiki language if declared, else null (informational for the mirror). */
+  languageOrNull() {
+    return this.cfg.tasks?.language ?? null;
+  }
   /** OPTIONAL. Returns null; the CALLER fails fast when it actually needs Jira. */
   jira() {
     return this.cfg.integrations?.jira ?? null;
+  }
+  /** OPTIONAL. Returns null; the CALLER fails fast when it actually needs Confluence (publish). */
+  confluence() {
+    return this.cfg.integrations?.confluence ?? null;
+  }
+  /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
+  userStoryLog() {
+    const u = this.cfg.integrations?.upstream?.userStoryLog;
+    if (!u) {
+      throw new DomainError(
+        "project has no [integrations.upstream.userStoryLog]; required by pull-stories",
+        2
+      );
+    }
+    return u;
   }
 };
 
@@ -9339,6 +9444,260 @@ async function trace(id, deps) {
   };
 }
 
+// src/application/usecases/RenderStoryPullPlan.ts
+async function renderStoryPullPlan(deps) {
+  const u = deps.config.userStoryLog();
+  return {
+    cloudId: u.cloudId,
+    rootPageId: u.pageId,
+    childTitlePrefix: u.childTitlePrefix ?? "Story:",
+    alreadyPulled: await deps.ledger.readPulled()
+  };
+}
+
+// src/application/usecases/RecordStorySnapshot.ts
+var SYNC_DIR = "raw/_synced/user-story-log";
+var MAX_BODY_BYTES = 512 * 1024;
+function normalizeBody(s) {
+  return `${s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/, "")}
+`;
+}
+async function recordStorySnapshot(input, deps) {
+  if (!input.pageId) throw new DomainError("record-story: missing --page", 1);
+  if (!input.title) throw new DomainError("record-story: missing --title", 1);
+  const body = input.body ?? "";
+  if (body.trim() === "") throw new DomainError("record-story: empty page body", 2);
+  if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
+    throw new DomainError("record-story: page body exceeds 512KB", 2);
+  }
+  const slug = input.slug ?? requireSlug(input.title);
+  const relPath = `${SYNC_DIR}/${input.pageId}-${slug}.md`;
+  const content = normalizeBody(body);
+  const contentHash = deps.hash(content);
+  const rows = await deps.ledger.readPulled();
+  const existing = rows.find((r) => r.pageId === input.pageId);
+  if (existing && existing.contentHash === contentHash && existing.relPath === relPath) {
+    return { relPath, written: false, drifted: false, contentHash };
+  }
+  const pulledAt = input.pulledAt ?? deps.clock.now().toISOString();
+  const frontmatter = {
+    source: "confluence",
+    pageId: input.pageId,
+    title: input.title,
+    version: input.version,
+    pulledAt,
+    contentHash
+  };
+  if (input.parentId) frontmatter.parentId = input.parentId;
+  if (existing && existing.relPath !== relPath) await deps.repo.deleteFile(existing.relPath);
+  await deps.repo.write(relPath, deps.frontmatter.stringify({ frontmatter, content }));
+  await deps.ledger.appendPulled({
+    pageId: input.pageId,
+    relPath,
+    title: input.title,
+    version: input.version,
+    contentHash,
+    pulledAt,
+    source: "confluence"
+  });
+  return { relPath, written: true, drifted: existing != null, contentHash };
+}
+
+// src/application/usecases/PruneStorySnapshots.ts
+async function pruneStorySnapshots(livePageIds, deps) {
+  const live = new Set(livePageIds);
+  const rows = await deps.ledger.readPulled();
+  const orphans = rows.filter((r) => !live.has(r.pageId));
+  for (const o of orphans) {
+    await deps.repo.deleteFile(o.relPath);
+    await deps.ledger.removePulled(o.pageId);
+  }
+  return {
+    pruned: orphans.map((o) => ({ pageId: o.pageId, relPath: o.relPath })).sort((a, b) => a.pageId.localeCompare(b.pageId))
+  };
+}
+
+// src/domain/services/ConfluenceTree.ts
+var DEFAULT_EXCLUDE = {
+  statuses: ["proposed", "rejected"],
+  basenames: ["risks", "gap-analysis", "kanban"]
+};
+var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+function isPageExcluded(page, exclude) {
+  const fm = page.frontmatter;
+  if (fm.confluence === true) return false;
+  if (fm.confluence === false || fm.audience === "internal") return true;
+  if (exclude.basenames.includes(page.basename)) return true;
+  if (kindOfPage(page) === "adr") {
+    const st = String(fm.status ?? "").toLowerCase();
+    if (st && exclude.statuses.includes(st)) return true;
+  }
+  return false;
+}
+function parentSourceOf(page, hubMap, includedSources, indexSource) {
+  if (page.relPath === indexSource) return null;
+  const kind = kindOfPage(page);
+  if (kind && kind !== "arc42") {
+    const hub = hubMap.get(kind) ?? null;
+    if (hub && hub !== page.relPath && includedSources.has(hub)) return hub;
+  }
+  return indexSource && indexSource !== page.relPath ? indexSource : null;
+}
+function depthOf(relPath, parents) {
+  let depth = 0;
+  let cur = parents.get(relPath) ?? null;
+  const seen = /* @__PURE__ */ new Set([relPath]);
+  while (cur != null && !seen.has(cur)) {
+    seen.add(cur);
+    depth += 1;
+    cur = parents.get(cur) ?? null;
+  }
+  return depth;
+}
+function sortParentFirst(relPaths, parents) {
+  return [...relPaths].sort(
+    (a, b) => depthOf(a, parents) - depthOf(b, parents) || a.localeCompare(b)
+  );
+}
+function resolveCrossLinks(content, g, publishedMap, includedSources) {
+  const crossLinks = [];
+  const body = content.replace(WIKILINK_RE, (_m, _bang, target, alias) => {
+    const label = (alias ?? target).trim();
+    const page = g.byBasename.get(target);
+    const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : void 0;
+    if (pageId) {
+      crossLinks.push({ target, resolved: true, pageId });
+      return `[${label}](${pageId})`;
+    }
+    crossLinks.push({ target, resolved: false });
+    return label;
+  });
+  return { body, crossLinks };
+}
+
+// src/application/usecases/RenderConfluencePayload.ts
+function normalizeBody2(s) {
+  return `${s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/, "")}
+`;
+}
+function titleOf(page) {
+  return page.headings[0]?.trim() || page.basename;
+}
+async function renderConfluencePayload(deps) {
+  const conf = deps.config.confluence();
+  const spaceId = conf?.space;
+  if (!spaceId) {
+    throw new DomainError(
+      "project has no [integrations.confluence.space]; required by render-confluence",
+      2
+    );
+  }
+  const language = deps.config.languageOrNull();
+  const rawExclude = conf.exclude;
+  const exclude = {
+    statuses: rawExclude?.statuses ?? DEFAULT_EXCLUDE.statuses,
+    basenames: rawExclude?.basenames ?? DEFAULT_EXCLUDE.basenames
+  };
+  const pages = await deps.repo.loadPages();
+  const graph = buildGraph(pages);
+  const included = pages.filter((p) => !isPageExcluded(p, exclude));
+  const includedSources = new Set(included.map((p) => p.relPath));
+  const hubMap = /* @__PURE__ */ new Map();
+  for (const kind of Object.keys(ARTIFACT_SPECS)) {
+    hubMap.set(kind, deps.config.hubFile(kind));
+  }
+  const indexPage = included.find((p) => p.basename === "index") ?? null;
+  const indexSource = indexPage?.relPath ?? null;
+  const parents = /* @__PURE__ */ new Map();
+  for (const p of included) {
+    parents.set(p.relPath, parentSourceOf(p, hubMap, includedSources, indexSource));
+  }
+  const ledgerRows = await deps.ledger.readPages();
+  const publishedMap = /* @__PURE__ */ new Map();
+  const ledgerHash = /* @__PURE__ */ new Map();
+  for (const r of ledgerRows) {
+    publishedMap.set(r.source, r.page);
+    ledgerHash.set(r.source, r.contentHash);
+  }
+  const envelopes = /* @__PURE__ */ new Map();
+  for (const p of included) {
+    const parsed = await deps.repo.readParsed(p.relPath);
+    const { body, crossLinks } = resolveCrossLinks(
+      normalizeBody2(parsed.content),
+      graph,
+      publishedMap,
+      includedSources
+    );
+    const title = titleOf(p);
+    const parentSource = parents.get(p.relPath) ?? null;
+    const contentHash = deps.hash(JSON.stringify({ title, parentSource, body }));
+    const alreadyPublished = publishedMap.has(p.relPath);
+    const warnings = crossLinks.some((c) => !c.resolved) ? ["some cross-link targets are not yet published (rendered as plain text)"] : [];
+    envelopes.set(p.relPath, {
+      source: p.relPath,
+      basename: p.basename,
+      title,
+      spaceId,
+      parentSource,
+      language,
+      body,
+      crossLinks,
+      contentHash,
+      alreadyPublished,
+      drifted: alreadyPublished && ledgerHash.get(p.relPath) !== contentHash,
+      pageId: publishedMap.get(p.relPath) ?? null,
+      warnings
+    });
+  }
+  const ordered = sortParentFirst([...envelopes.keys()], parents).map((s) => envelopes.get(s));
+  const orphans = ledgerRows.filter((r) => !includedSources.has(r.source)).map((r) => ({ page: r.page, source: r.source })).sort((a, b) => a.source.localeCompare(b.source));
+  return { spaceId, pages: ordered, orphans };
+}
+
+// src/application/usecases/RecordPage.ts
+async function recordPage(input, deps) {
+  const { repo, ledger, frontmatter, clock } = deps;
+  const source = input.source?.trim();
+  if (!source) throw new DomainError("record-page: missing --source", 1);
+  if (input.del) {
+    const ledgerRemoved = await ledger.removePage(source);
+    let frontmatterUpdated2 = false;
+    if (await repo.exists(source)) {
+      const { frontmatter: fm, content } = await repo.readParsed(source);
+      if (Array.isArray(fm.published_as)) {
+        const next = { ...fm };
+        delete next.published_as;
+        await repo.write(source, frontmatter.stringify({ frontmatter: next, content }));
+        frontmatterUpdated2 = true;
+      }
+    }
+    return { source, page: null, ledgerAppended: false, ledgerRemoved, frontmatterUpdated: frontmatterUpdated2 };
+  }
+  const page = input.page?.trim();
+  if (!page) throw new DomainError("record-page: missing --page", 1);
+  if (!input.hash?.trim()) throw new DomainError("record-page: missing --hash", 1);
+  const system = input.system?.trim() || "confluence";
+  const ledgerAppended = await ledger.appendPage({
+    source,
+    page,
+    contentHash: input.hash,
+    publishedAt: clock.now().toISOString(),
+    system
+  });
+  let frontmatterUpdated = false;
+  if (await repo.exists(source)) {
+    const { frontmatter: fm, content } = await repo.readParsed(source);
+    const tag = `${system}:${page}`;
+    const existing = Array.isArray(fm.published_as) ? fm.published_as.map(String) : [];
+    if (!existing.includes(tag)) {
+      const merged = deepMerge(fm, { published_as: [...existing, tag].sort() });
+      await repo.write(source, frontmatter.stringify({ frontmatter: merged, content }));
+      frontmatterUpdated = true;
+    }
+  }
+  return { source, page, ledgerAppended, ledgerRemoved: false, frontmatterUpdated };
+}
+
 // src/application/usecases/EnrichDriver.ts
 var HEADING3 = "## Related Patterns";
 var START = "<!-- arch-wiki:enrich:start -->";
@@ -9544,6 +9903,24 @@ function runLint(g, ctx = {}) {
       }
     }
   }
+  const byName = /* @__PURE__ */ new Map();
+  for (const p of g.pages) {
+    const arr = byName.get(p.basename);
+    if (arr) arr.push(p);
+    else byName.set(p.basename, [p]);
+  }
+  for (const [name, ps] of byName) {
+    if (ps.length < 2) continue;
+    for (const p of ps) {
+      const others = ps.filter((o) => o.relPath !== p.relPath).map((o) => o.relPath).sort();
+      findings.push({
+        rule: "duplicate-basename",
+        severity: "high",
+        file: p.relPath,
+        message: `duplicate basename [[${name}]] also at ${others.join(", ")}`
+      });
+    }
+  }
   for (const p of g.pages) {
     if (kindOfPage(p) === "arc42") continue;
     if (STRUCTURAL.has(p.basename)) continue;
@@ -9682,6 +10059,161 @@ async function lintWiki(repo, opts = {}) {
   const counts = { high: 0, medium: 0, low: 0 };
   for (const f of findings) counts[f.severity] += 1;
   return { findings, counts, supersededCitations: gatherSupersededCitations(graph) };
+}
+
+// src/domain/services/C4Consistency.ts
+var WIKI_C4_KINDS = ["entity"];
+function lastSegment(id) {
+  const i = id.lastIndexOf(".");
+  return i >= 0 ? id.slice(i + 1) : id;
+}
+function norm(s) {
+  return slugify(s);
+}
+function explicitC4(page) {
+  const v = page.frontmatter.c4;
+  if (v === false || v === "none" || v === "false") return "opt-out";
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return null;
+}
+function checkC4Consistency(model, g, policy) {
+  const findings = [];
+  const ignore = new Set(policy.ignore);
+  const required = new Set(policy.requireDocumentation.map((k) => k.toLowerCase()));
+  const entities = pagesOfKind(g, WIKI_C4_KINDS);
+  const byExplicit = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const p of entities) {
+    const ex = explicitC4(p);
+    if (typeof ex === "string") byExplicit.set(ex, p);
+    byName.set(norm(p.basename), p);
+  }
+  const matchElement = (el) => {
+    const ex = byExplicit.get(el.id) ?? byExplicit.get(lastSegment(el.id));
+    if (ex) return ex;
+    return byName.get(norm(el.title)) ?? byName.get(norm(lastSegment(el.id))) ?? null;
+  };
+  const sortedElements = [...model.elements].sort((a, b) => a.id.localeCompare(b.id));
+  const matchedBasenames = /* @__PURE__ */ new Set();
+  const elementMatch = /* @__PURE__ */ new Map();
+  for (const el of sortedElements) {
+    const m = matchElement(el);
+    elementMatch.set(el.id, m);
+    if (m) matchedBasenames.add(m.basename);
+  }
+  for (const el of sortedElements) {
+    if (!required.has(el.kind.toLowerCase())) continue;
+    if (ignore.has(el.id)) continue;
+    if (!elementMatch.get(el.id)) {
+      findings.push({
+        rule: "c4-element-without-wiki-entity",
+        severity: policy.severity,
+        message: `C4 ${el.kind} "${el.id}" has no wiki entity`
+      });
+    }
+  }
+  for (const p of entities) {
+    if (ignore.has(p.basename)) continue;
+    if (explicitC4(p) === "opt-out") continue;
+    if (matchedBasenames.has(p.basename)) continue;
+    findings.push({
+      rule: "wiki-entity-without-c4-element",
+      severity: policy.severity,
+      file: p.relPath,
+      message: `entity ${p.basename} has no matching C4 element`
+    });
+  }
+  return sortFindings(findings.filter((f) => !ignore.has(f.rule)));
+}
+
+// src/application/usecases/ValidateC4.ts
+var C4_BASELINE_FILE = ".arch-wiki/c4-baseline.json";
+async function validateC4(model, repo, opts) {
+  const graph = buildGraph(await repo.loadPages());
+  const entityCount = pagesOfKind(graph, ["entity"]).length;
+  const all = checkC4Consistency(model, graph, opts.policy);
+  if (opts.establishBaseline) {
+    const keys = [...new Set(all.map(baselineKey))].sort();
+    await repo.write(C4_BASELINE_FILE, `${JSON.stringify(keys, null, 2)}
+`);
+    return {
+      findings: [],
+      counts: { high: 0, medium: 0, low: 0 },
+      elementCount: model.elements.length,
+      entityCount,
+      baselineEstablished: keys.length
+    };
+  }
+  const baselineList = await repo.readC4Baseline();
+  let findings = all;
+  if (baselineList.length) {
+    const baseline = new Set(baselineList);
+    findings = findings.filter((f) => !baseline.has(baselineKey(f)));
+  }
+  if (opts.severity) {
+    const min = SEVERITY_RANK[opts.severity];
+    findings = findings.filter((f) => SEVERITY_RANK[f.severity] >= min);
+  }
+  const counts = { high: 0, medium: 0, low: 0 };
+  for (const f of findings) counts[f.severity] += 1;
+  return { findings, counts, elementCount: model.elements.length, entityCount };
+}
+
+// src/adapters/c4/LikeC4ModelReader.ts
+function lastSegment2(id) {
+  const i = id.lastIndexOf(".");
+  return i >= 0 ? id.slice(i + 1) : id;
+}
+function asRecord(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+}
+function pickElements(root) {
+  if (root.elements !== void 0) return root.elements;
+  const model = asRecord(root.model);
+  if (model?.elements !== void 0) return model.elements;
+  const project = asRecord(root.project);
+  if (project?.elements !== void 0) return project.elements;
+  return void 0;
+}
+function toElement(raw, key) {
+  const id = String(raw.id ?? key ?? "");
+  const title = String(raw.title ?? raw.name ?? lastSegment2(id) ?? "");
+  const tags = Array.isArray(raw.tags) ? raw.tags.map(String) : void 0;
+  return { id, kind: String(raw.kind ?? ""), title, tags };
+}
+function normalizeC4ModelJson(raw) {
+  const root = asRecord(raw);
+  if (!root) return { elements: [] };
+  const container = pickElements(root);
+  const elements = [];
+  if (Array.isArray(container)) {
+    for (const e of container) {
+      const rec = asRecord(e);
+      if (rec) elements.push(toElement(rec, void 0));
+    }
+  } else {
+    const map = asRecord(container);
+    if (map) for (const [key, e] of Object.entries(map)) {
+      const rec = asRecord(e);
+      if (rec) elements.push(toElement(rec, key));
+    }
+  }
+  return { elements: elements.filter((e) => e.id !== "" && e.kind !== "") };
+}
+function parseC4Sources(text) {
+  const elements = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (id, kind, title) => {
+    if (!id || !kind || seen.has(id)) return;
+    seen.add(id);
+    elements.push({ id, kind, title: (title ?? id).trim() });
+  };
+  const src = text.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const assign = /(^|[\s{])([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*(?:'([^']*)'|"([^"]*)")?/g;
+  for (let m; m = assign.exec(src); ) push(m[2], m[3], m[4] ?? m[5]);
+  const decl = /(^|[\s{])([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:'([^']*)'|"([^"]*)")/g;
+  for (let m; m = decl.exec(src); ) push(m[3], m[2], m[4] ?? m[5]);
+  return { elements: elements.sort((a, b) => a.id.localeCompare(b.id)) };
 }
 
 // src/application/usecases/RecordRisk.ts
@@ -9941,7 +10473,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.4.2";
+var PLUGIN_VERSION = "0.5.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -10191,6 +10723,104 @@ async function main() {
       fail("trace", err);
     }
   });
+  cli.command("pull-stories", "render the deterministic plan to pull the PO User Story Log (CAP-1)").option("--plan", "emit the enumeration plan (cloudId/rootPageId/alreadyPulled) \u2014 default").action(async (opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const plan = await renderStoryPullPlan({
+        config: await loadProjectConfig(opts),
+        ledger: new FileLedgerStore(wikiRoot(opts), fs2)
+      });
+      emit({ ok: true, command: "pull-stories", data: plan });
+    } catch (err) {
+      fail("pull-stories", err);
+    }
+  });
+  cli.command("record-story", "write a READ-ONLY User Story snapshot into raw/_synced (body via stdin)").option("--page <id>", "upstream Confluence page id").option("--title <title>", "story title").option("--version <n>", "upstream page version").option("--parent <id>", "parent page id").option("--slug <slug>", "explicit kebab slug (for non-latin titles)").action(async (opts) => {
+    try {
+      if (!opts.page) throw new DomainError("missing --page", 1);
+      if (!opts.title) throw new DomainError("missing --title", 1);
+      const body = await readStdin();
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const result = await recordStorySnapshot(
+        {
+          pageId: String(opts.page),
+          title: String(opts.title),
+          version: opts.version != null ? Number(opts.version) : 0,
+          body,
+          parentId: opts.parent != null ? String(opts.parent) : void 0,
+          slug: opts.slug
+        },
+        {
+          repo: new FoamWikiRepository(root, fs2),
+          ledger: new FileLedgerStore(root, fs2),
+          clock: new SystemClock(),
+          hash: sha256,
+          frontmatter: new GrayMatterParser()
+        }
+      );
+      emit({ ok: true, command: "record-story", data: result });
+    } catch (err) {
+      fail("record-story", err);
+    }
+  });
+  cli.command("prune-stories", "orphan-reconcile pulled snapshots against the live upstream page-id set").option("--live <ids>", "comma-separated upstream page-ids still present (empty = prune all)").action(async (opts) => {
+    try {
+      if (opts.live == null) {
+        throw new DomainError("prune-stories: missing --live (pass empty only to prune all)", 1);
+      }
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const result = await pruneStorySnapshots(csv(opts.live), {
+        repo: new FoamWikiRepository(root, fs2),
+        ledger: new FileLedgerStore(root, fs2)
+      });
+      emit({ ok: true, command: "prune-stories", data: result });
+    } catch (err) {
+      fail("prune-stories", err);
+    }
+  });
+  cli.command("render-confluence", "render the full Confluence KB-mirror plan (CAP-2; MCP-free)").option("--all", "mirror the whole wiki (default)").option("--page <path>", "restrict the emitted plan to a single wiki source path (testing/incremental)").action(async (opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const plan = await renderConfluencePayload({
+        repo: new FoamWikiRepository(root, fs2),
+        ledger: new FileLedgerStore(root, fs2),
+        config: await loadProjectConfig(opts),
+        hash: sha256
+      });
+      const data = opts.page ? { ...plan, pages: plan.pages.filter((p) => p.source === String(opts.page)) } : plan;
+      emit({ ok: true, command: "render-confluence", data });
+    } catch (err) {
+      fail("render-confluence", err);
+    }
+  });
+  cli.command("record-page", "record a published Confluence page in the ledger + published_as frontmatter").option("--source <path>", "wiki-relative source path (the ledger key)").option("--page <id>", "external Confluence page id").option("--hash <hash>", "content hash from render-confluence").option("--system <system>", "external system (default confluence)").option("--delete", "reconcile a deleted orphan: drop the ledger row + published_as").action(async (opts) => {
+    try {
+      if (!opts.source) throw new DomainError("missing --source", 1);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const result = await recordPage(
+        {
+          source: String(opts.source),
+          page: opts.page != null ? String(opts.page) : void 0,
+          hash: opts.hash != null ? String(opts.hash) : void 0,
+          system: opts.system != null ? String(opts.system) : void 0,
+          del: !!opts["delete"]
+        },
+        {
+          repo: new FoamWikiRepository(root, fs2),
+          ledger: new FileLedgerStore(root, fs2),
+          frontmatter: new GrayMatterParser(),
+          clock: new SystemClock()
+        }
+      );
+      emit({ ok: true, command: "record-page", data: result });
+    } catch (err) {
+      fail("record-page", err);
+    }
+  });
   cli.command("guard-path", "PreToolUse hook: block writes to raw/ and .likec4 snapshots").option("--stdin", "read the hook payload from stdin").action(async () => {
     try {
       const fp = hookFilePath(await readStdin());
@@ -10300,6 +10930,51 @@ async function main() {
       if (broken.length > 0) process.exit(2);
     } catch (err) {
       fail("validate-graph", err);
+    }
+  });
+  cli.command("validate-c4", "check C4 model \u27F7 wiki entity consistency (deterministic, MCP-free)").option("--stdin", "read the normalized C4 model JSON from stdin (LikeC4 MCP / likec4 export json)").option("--model-json <file>", "read the normalized C4 model JSON from a file").option("--source <mode>", "json|regex (default json; regex reads c4().dir *.c4 \u2014 lossy fallback)").option("--establish-baseline", "record current mismatches as the known baseline (no findings emitted)").option("--severity <level>", "minimum severity: low|medium|high").action(async (opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const config = await loadProjectConfig(opts);
+      const policy = config.c4Consistency();
+      const source = opts.source != null ? String(opts.source) : "json";
+      let model;
+      if (source === "regex") {
+        const c4dir = path8.join(root, config.c4().dir);
+        const files = await fs2.exists(c4dir) ? (await fs2.walk(c4dir)).filter((f) => f.endsWith(".c4")) : [];
+        const text = (await Promise.all(files.map((f) => fs2.readFile(f)))).join("\n");
+        model = parseC4Sources(text);
+      } else if (source === "json") {
+        let text;
+        if (opts.stdin) {
+          text = await readStdin();
+        } else if (opts["modelJson"]) {
+          const arg = String(opts["modelJson"]);
+          text = await fs2.readFile(path8.isAbsolute(arg) ? arg : path8.join(opts.cwd ?? process.cwd(), arg));
+        } else {
+          throw new DomainError("validate-c4: provide --stdin or --model-json <file> (or --source regex)", 1);
+        }
+        let raw;
+        try {
+          raw = JSON.parse(text);
+        } catch (e) {
+          throw new DomainError(`validate-c4: malformed model JSON: ${e.message}`, 2);
+        }
+        model = normalizeC4ModelJson(raw);
+      } else {
+        throw new DomainError(`validate-c4: unknown --source "${source}" (valid: json, regex)`, 1);
+      }
+      const report = await validateC4(model, repo, {
+        policy,
+        establishBaseline: !!opts["establishBaseline"],
+        severity: opts.severity
+      });
+      emit({ ok: report.findings.length === 0, command: "validate-c4", data: report });
+      if (!opts["establishBaseline"] && report.findings.length > 0) process.exit(2);
+    } catch (err) {
+      fail("validate-c4", err);
     }
   });
   cli.command("list <type>", "list existing artifacts of a type").action(async (type, opts) => {

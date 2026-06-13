@@ -17,8 +17,15 @@ arc42 map, filename conventions, the wikilink convention, and the invariants.
 - **Never rewrite an accepted ADR.** New decisions are new ADRs with `Status:
   proposed`; superseding follows the `madr-format` rules.
 - Prefer updating an existing page over creating a near-duplicate (search first
-  with Grep/Glob by ID and by title).
+  with Grep/Glob by ID and by title). You MAY also consult the **Foam MCP**
+  (read-only: backlinks / tags / search) to surface related notes before creating
+  one — but the authoritative "does this id/page exist" answer is `arch-wiki list` /
+  `resolveBasename`, never Foam.
 - Use the templates in `docs/architecture/.foam/templates/` as page skeletons.
+- **User Story Log snapshots** (`raw/_synced/user-story-log/`, `source: confluence`) are
+  upstream-**advisory** (inspiration), not canon. When ingesting one, if a driver already
+  carries `source: <that snapshot path>`, SKIP or UPDATE per the SA's choice — never create a
+  duplicate. Drivers are the SA's canonical artifacts; the PO log refreshes, it does not own them.
 
 ## Procedure
 1. Read the given raw source completely.

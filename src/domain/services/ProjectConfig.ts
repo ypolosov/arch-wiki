@@ -47,6 +47,25 @@ export class ProjectConfig {
     return this.cfg.c4;
   }
 
+  /**
+   * OPTIONAL+default. The C4↔wiki consistency policy for `validate-c4`. Never
+   * throws — validate-c4 works with sensible defaults even without a [c4] block
+   * (the model arrives via --model-json, not from c4().dir). Default keeps the
+   * check low-noise: only `system`+`container` elements must be documented.
+   */
+  c4Consistency(): {
+    requireDocumentation: string[];
+    severity: 'high' | 'medium' | 'low';
+    ignore: string[];
+  } {
+    const c = this.cfg.c4?.consistency;
+    return {
+      requireDocumentation: c?.requireDocumentation ?? ['system', 'container'],
+      severity: c?.severity ?? 'medium',
+      ignore: c?.ignore ?? [],
+    };
+  }
+
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent (no guess). */
   taskPrefix(kind: 'arch' | 'techdesign', role?: string): string {
     const t = this.cfg.tasks;
@@ -68,8 +87,32 @@ export class ProjectConfig {
     return l;
   }
 
+  /** OPTIONAL. The wiki language if declared, else null (informational for the mirror). */
+  languageOrNull(): string | null {
+    return this.cfg.tasks?.language ?? null;
+  }
+
   /** OPTIONAL. Returns null; the CALLER fails fast when it actually needs Jira. */
   jira(): NonNullable<NonNullable<ProjectConfigFile['integrations']>['jira']> | null {
     return this.cfg.integrations?.jira ?? null;
+  }
+
+  /** OPTIONAL. Returns null; the CALLER fails fast when it actually needs Confluence (publish). */
+  confluence(): NonNullable<NonNullable<ProjectConfigFile['integrations']>['confluence']> | null {
+    return this.cfg.integrations?.confluence ?? null;
+  }
+
+  /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
+  userStoryLog(): NonNullable<
+    NonNullable<NonNullable<ProjectConfigFile['integrations']>['upstream']>['userStoryLog']
+  > {
+    const u = this.cfg.integrations?.upstream?.userStoryLog;
+    if (!u) {
+      throw new DomainError(
+        'project has no [integrations.upstream.userStoryLog]; required by pull-stories',
+        2,
+      );
+    }
+    return u;
   }
 }

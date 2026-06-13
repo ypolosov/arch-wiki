@@ -95,6 +95,14 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
    silently overwrite recorded decisions.
 6. Each page touched gets/refreshes a **Sources** section pointing back to the raw file.
 
+### Functional rules from the Product Owner: `/arch-wiki:pull-stories` (CAP-1)
+The PO maintains a read-only Confluence "User Story Log" (`integrations.upstream.userStoryLog`).
+`pull-stories` snapshots it (+ its child stories) into `raw/_synced/user-story-log/` via the
+Confluence MCP — the CLI is the authorized writer (never hand-edit `raw/_synced/`); re-pulls
+are idempotent (drift by contentHash) and orphans are reconciled with `prune-stories`. Then
+`/arch-wiki:ingest raw/_synced/user-story-log/` turns stories into drivers. The log is
+**advisory** (inspiration); drivers are the SA's canon — ingest dedups, never duplicates.
+
 ### Design process: `hypothesis` → `questionnaire` → `ingest` → `render-issue` → `trace`
 - **`/arch-wiki:hypothesis <title> [from raw/<file>]`** — scaffold a `concept`
   hypothesis with traceability frontmatter (`status: hypothesis`, `source`,
@@ -128,7 +136,9 @@ Audit and report (then propose fixes / append to `risks.md`):
 - QA scenario with no linked ADR **or** no linked C4 element.
 - Driver (UC/QA/CON/CONC) with no coverage in any ADR/iteration (gap analysis).
 - ADR with `status: superseded`/`deprecated` but no link to its successor.
-- C4 element in `c4/src/*.c4` not referenced by any driver/ADR (and vice-versa).
+- C4 element ⟷ wiki entity drift — the **deterministic verdict is
+  `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this
+  LLM-lint line only adds nuance the rule cannot judge.
 - Terminology drift: terms used across pages but absent from `glossary.md`.
 - Missing referenced pages (e.g. `utility-tree`, `gap-analysis`).
 
@@ -144,6 +154,27 @@ Audit and report (then propose fixes / append to `risks.md`):
   regenerate the static site / `npm run export` for PNGs).
 - Record your top-level system and its subsystems here, e.g.:
   `Top system is <system> with subsystems <a>, <b>, <c>.`
+
+## MCP-Setup — integrations & navigation aids
+
+External side-effects (issues, publish, notifications) go through **MCP servers**
+declared in the target's `.mcp.json` or at user scope — **never hardcode secrets**;
+pass them as `${ENV}`. Commands that need one (`render-issue`, `publish`) first
+`ToolSearch` for it and stop with this setup hint if absent.
+
+**Foam MCP** and **LikeC4 MCP** are **read-only navigation aids** (Foam: wikilinks /
+backlinks / tags graph; LikeC4: `read-project-summary` / `search-element` /
+`query-graph`). They help humans/agents explore — they are **NOT authoritative**.
+Every verdict on links / orphans / coverage / C4-drift / ids / scaffold comes only
+from `arch-wiki` (the deterministic Core). The CLI never calls these MCPs; if they
+are absent, every `arch-wiki` operation is unaffected. LikeC4 stays hand-authored
+(`c4/src/*.c4`); the cartographer **proposes**, `arch-wiki validate-c4` **judges**.
+
+### `/arch-wiki:validate-c4`
+Get the model JSON from the LikeC4 MCP (`read-project-summary`) — or `likec4 export
+json` in headless/CI — and pipe it to `arch-wiki validate-c4 --stdin`. Core compares
+C4 elements ⟷ wiki entities deterministically (policy `c4.consistency` +
+`.arch-wiki/c4-baseline.json` for adoption); do not recompute its verdict by eye.
 
 ## Invariants
 - Never edit files in `raw/`.

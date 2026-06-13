@@ -256,4 +256,122 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(exitCode).toBe(1);
     expect(JSON.parse(stderr.trim()).ok).toBe(false);
   });
+
+  it('validate-c4 consumes model-JSON via stdin: clean passes, drift exits 2', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, 'entities'), { recursive: true });
+    await fs.writeFile(path.join(wiki, 'entities/backend.md'), '---\ntype: entity\n---\n# Backend\n');
+
+    const clean = JSON.stringify({ elements: [{ id: 'cloud.backend', kind: 'container', title: 'Backend' }] });
+    const okOut = execFileSync('node', [CLI, 'validate-c4', '--stdin', '--cwd', root], {
+      cwd: root,
+      encoding: 'utf8',
+      input: clean,
+    });
+    const okEnv = JSON.parse(okOut.trim().split('\n').pop()!) as Envelope;
+    expect(okEnv.ok).toBe(true);
+    expect((okEnv.data.findings as unknown[]).length).toBe(0);
+
+    const drift = JSON.stringify({
+      elements: [
+        { id: 'cloud.backend', kind: 'container', title: 'Backend' },
+        { id: 'cloud.db', kind: 'container', title: 'Database' },
+      ],
+    });
+    let exitCode = 0;
+    let stdout = '';
+    try {
+      stdout = execFileSync('node', [CLI, 'validate-c4', '--stdin', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+        input: drift,
+      });
+    } catch (e: unknown) {
+      const err = e as { status: number; stdout: string };
+      exitCode = err.status;
+      stdout = err.stdout;
+    }
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout.trim().split('\n').pop()!) as Envelope;
+    const findings = env.data.findings as Array<{ rule: string; message: string }>;
+    expect(findings.some((f) => f.rule === 'c4-element-without-wiki-entity' && f.message.includes('cloud.db'))).toBe(true);
+  });
+
+  it('CAP-1: pull-stories plan, record-story (stdin) into raw/_synced, idempotent, prune', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, '.arch-wiki/config.json'),
+      JSON.stringify({ integrations: { upstream: { userStoryLog: { cloudId: 'cid-1', pageId: '16121885' } } } }),
+    );
+
+    const plan = run(['pull-stories', '--plan', '--cwd', root], root);
+    expect(plan.ok).toBe(true);
+    expect((plan.data as { rootPageId: string }).rootPageId).toBe('16121885');
+
+    const rec = JSON.parse(
+      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--version', '3', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+        input: 'As a user I can log in.\n',
+      })
+        .trim()
+        .split('\n')
+        .pop()!,
+    ) as Envelope;
+    expect((rec.data as { written: boolean }).written).toBe(true);
+    expect((rec.data as { relPath: string }).relPath).toBe('raw/_synced/user-story-log/777-brand-login.md');
+    const snap = await fs.readFile(path.join(wiki, 'raw/_synced/user-story-log/777-brand-login.md'), 'utf8');
+    expect(snap).toContain('source: confluence');
+    expect(snap).toContain('As a user I can log in.');
+
+    // Idempotent re-pull.
+    const again = JSON.parse(
+      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--version', '3', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+        input: 'As a user I can log in.\n',
+      })
+        .trim()
+        .split('\n')
+        .pop()!,
+    ) as Envelope;
+    expect((again.data as { written: boolean }).written).toBe(false);
+
+    // Prune against a live set that no longer contains 777 → it is reconciled away.
+    const pruned = run(['prune-stories', '--live', '999', '--cwd', root], root);
+    expect((pruned.data as { pruned: Array<{ pageId: string }> }).pruned).toEqual([
+      { pageId: '777', relPath: 'raw/_synced/user-story-log/777-brand-login.md' },
+    ]);
+  });
+
+  it('CAP-2: render-confluence mirror plan + record-page idempotency', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, '.arch-wiki/config.json'),
+      JSON.stringify({ integrations: { confluence: { space: 'PP' } } }),
+    );
+    await fs.mkdir(path.join(wiki, 'entities'), { recursive: true });
+    await fs.writeFile(path.join(wiki, 'index.md'), '# Wiki\n');
+    await fs.writeFile(path.join(wiki, 'entities/cache.md'), '# Cache\n');
+
+    const plan = run(['render-confluence', '--all', '--cwd', root], root);
+    expect(plan.ok).toBe(true);
+    const pages = plan.data.pages as Array<{ source: string; contentHash: string }>;
+    const cache = pages.find((p) => p.source === 'entities/cache.md')!;
+    expect(cache).toBeTruthy();
+
+    const rec = run(
+      ['record-page', '--source', 'entities/cache.md', '--page', '4242', '--hash', cache.contentHash, '--cwd', root],
+      root,
+    );
+    expect((rec.data as { ledgerAppended: boolean }).ledgerAppended).toBe(true);
+
+    const plan2 = run(['render-confluence', '--all', '--cwd', root], root);
+    const cache2 = (plan2.data.pages as Array<{ source: string; alreadyPublished: boolean }>).find(
+      (p) => p.source === 'entities/cache.md',
+    )!;
+    expect(cache2.alreadyPublished).toBe(true);
+  });
 });

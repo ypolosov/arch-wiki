@@ -19,10 +19,18 @@ import { parseQuestionnaire } from '../application/usecases/ParseQuestionnaire';
 import { renderIssuePayload, IssueKind, IssueRole } from '../application/usecases/RenderIssuePayload';
 import { recordIssue } from '../application/usecases/RecordIssue';
 import { trace } from '../application/usecases/Trace';
+import { renderStoryPullPlan } from '../application/usecases/RenderStoryPullPlan';
+import { recordStorySnapshot } from '../application/usecases/RecordStorySnapshot';
+import { pruneStorySnapshots } from '../application/usecases/PruneStorySnapshots';
+import { renderConfluencePayload } from '../application/usecases/RenderConfluencePayload';
+import { recordPage } from '../application/usecases/RecordPage';
 import { enrichDriver } from '../application/usecases/EnrichDriver';
 import { BooksRagPlanner } from '../adapters/rag/BooksRagPlanner';
 import { BooksAnswer, BooksQueryInput } from '../application/ports/BooksRagPort';
 import { lintWiki } from '../application/usecases/LintWiki';
+import { validateC4 } from '../application/usecases/ValidateC4';
+import { C4Model } from '../domain/services/C4Consistency';
+import { normalizeC4ModelJson, parseC4Sources } from '../adapters/c4/LikeC4ModelReader';
 import { recordRisk } from '../application/usecases/RecordRisk';
 import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
 import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
@@ -382,6 +390,135 @@ async function main(): Promise<void> {
     });
 
   cli
+    .command('pull-stories', 'render the deterministic plan to pull the PO User Story Log (CAP-1)')
+    .option('--plan', 'emit the enumeration plan (cloudId/rootPageId/alreadyPulled) — default')
+    .action(async (opts: GlobalOpts) => {
+      try {
+        const fs = new NodeFileSystem();
+        const plan = await renderStoryPullPlan({
+          config: await loadProjectConfig(opts),
+          ledger: new FileLedgerStore(wikiRoot(opts), fs),
+        });
+        emit({ ok: true, command: 'pull-stories', data: plan });
+      } catch (err) {
+        fail('pull-stories', err);
+      }
+    });
+
+  cli
+    .command('record-story', 'write a READ-ONLY User Story snapshot into raw/_synced (body via stdin)')
+    .option('--page <id>', 'upstream Confluence page id')
+    .option('--title <title>', 'story title')
+    .option('--version <n>', 'upstream page version')
+    .option('--parent <id>', 'parent page id')
+    .option('--slug <slug>', 'explicit kebab slug (for non-latin titles)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.page) throw new DomainError('missing --page', 1);
+        if (!opts.title) throw new DomainError('missing --title', 1);
+        const body = await readStdin();
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const result = await recordStorySnapshot(
+          {
+            pageId: String(opts.page),
+            title: String(opts.title),
+            version: opts.version != null ? Number(opts.version) : 0,
+            body,
+            parentId: opts.parent != null ? String(opts.parent) : undefined,
+            slug: opts.slug as string | undefined,
+          },
+          {
+            repo: new FoamWikiRepository(root, fs),
+            ledger: new FileLedgerStore(root, fs),
+            clock: new SystemClock(),
+            hash: sha256,
+            frontmatter: new GrayMatterParser(),
+          },
+        );
+        emit({ ok: true, command: 'record-story', data: result });
+      } catch (err) {
+        fail('record-story', err);
+      }
+    });
+
+  cli
+    .command('prune-stories', 'orphan-reconcile pulled snapshots against the live upstream page-id set')
+    .option('--live <ids>', 'comma-separated upstream page-ids still present (empty = prune all)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (opts.live == null) {
+          throw new DomainError('prune-stories: missing --live (pass empty only to prune all)', 1);
+        }
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const result = await pruneStorySnapshots(csv(opts.live), {
+          repo: new FoamWikiRepository(root, fs),
+          ledger: new FileLedgerStore(root, fs),
+        });
+        emit({ ok: true, command: 'prune-stories', data: result });
+      } catch (err) {
+        fail('prune-stories', err);
+      }
+    });
+
+  cli
+    .command('render-confluence', 'render the full Confluence KB-mirror plan (CAP-2; MCP-free)')
+    .option('--all', 'mirror the whole wiki (default)')
+    .option('--page <path>', 'restrict the emitted plan to a single wiki source path (testing/incremental)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const plan = await renderConfluencePayload({
+          repo: new FoamWikiRepository(root, fs),
+          ledger: new FileLedgerStore(root, fs),
+          config: await loadProjectConfig(opts),
+          hash: sha256,
+        });
+        const data = opts.page
+          ? { ...plan, pages: plan.pages.filter((p) => p.source === String(opts.page)) }
+          : plan;
+        emit({ ok: true, command: 'render-confluence', data });
+      } catch (err) {
+        fail('render-confluence', err);
+      }
+    });
+
+  cli
+    .command('record-page', 'record a published Confluence page in the ledger + published_as frontmatter')
+    .option('--source <path>', 'wiki-relative source path (the ledger key)')
+    .option('--page <id>', 'external Confluence page id')
+    .option('--hash <hash>', 'content hash from render-confluence')
+    .option('--system <system>', 'external system (default confluence)')
+    .option('--delete', 'reconcile a deleted orphan: drop the ledger row + published_as')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.source) throw new DomainError('missing --source', 1);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const result = await recordPage(
+          {
+            source: String(opts.source),
+            page: opts.page != null ? String(opts.page) : undefined,
+            hash: opts.hash != null ? String(opts.hash) : undefined,
+            system: opts.system != null ? String(opts.system) : undefined,
+            del: !!opts['delete'],
+          },
+          {
+            repo: new FoamWikiRepository(root, fs),
+            ledger: new FileLedgerStore(root, fs),
+            frontmatter: new GrayMatterParser(),
+            clock: new SystemClock(),
+          },
+        );
+        emit({ ok: true, command: 'record-page', data: result });
+      } catch (err) {
+        fail('record-page', err);
+      }
+    });
+
+  cli
     .command('guard-path', 'PreToolUse hook: block writes to raw/ and .likec4 snapshots')
     .option('--stdin', 'read the hook payload from stdin')
     .action(async () => {
@@ -513,6 +650,62 @@ async function main(): Promise<void> {
         if (broken.length > 0) process.exit(2);
       } catch (err) {
         fail('validate-graph', err);
+      }
+    });
+
+  cli
+    .command('validate-c4', 'check C4 model ⟷ wiki entity consistency (deterministic, MCP-free)')
+    .option('--stdin', 'read the normalized C4 model JSON from stdin (LikeC4 MCP / likec4 export json)')
+    .option('--model-json <file>', 'read the normalized C4 model JSON from a file')
+    .option('--source <mode>', 'json|regex (default json; regex reads c4().dir *.c4 — lossy fallback)')
+    .option('--establish-baseline', 'record current mismatches as the known baseline (no findings emitted)')
+    .option('--severity <level>', 'minimum severity: low|medium|high')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const config = await loadProjectConfig(opts);
+        const policy = config.c4Consistency();
+        const source = opts.source != null ? String(opts.source) : 'json';
+
+        let model: C4Model;
+        if (source === 'regex') {
+          // Lossy last-resort: read *.c4 under the configured c4 dir (throws exit 2 if no [c4]).
+          const c4dir = path.join(root, config.c4().dir);
+          const files = (await fs.exists(c4dir)) ? (await fs.walk(c4dir)).filter((f) => f.endsWith('.c4')) : [];
+          const text = (await Promise.all(files.map((f) => fs.readFile(f)))).join('\n');
+          model = parseC4Sources(text);
+        } else if (source === 'json') {
+          let text: string;
+          if (opts.stdin) {
+            text = await readStdin();
+          } else if (opts['modelJson']) {
+            const arg = String(opts['modelJson']);
+            text = await fs.readFile(path.isAbsolute(arg) ? arg : path.join(opts.cwd ?? process.cwd(), arg));
+          } else {
+            throw new DomainError('validate-c4: provide --stdin or --model-json <file> (or --source regex)', 1);
+          }
+          let raw: unknown;
+          try {
+            raw = JSON.parse(text);
+          } catch (e) {
+            throw new DomainError(`validate-c4: malformed model JSON: ${(e as Error).message}`, 2);
+          }
+          model = normalizeC4ModelJson(raw);
+        } else {
+          throw new DomainError(`validate-c4: unknown --source "${source}" (valid: json, regex)`, 1);
+        }
+
+        const report = await validateC4(model, repo, {
+          policy,
+          establishBaseline: !!opts['establishBaseline'],
+          severity: opts.severity as Severity | undefined,
+        });
+        emit({ ok: report.findings.length === 0, command: 'validate-c4', data: report });
+        if (!opts['establishBaseline'] && report.findings.length > 0) process.exit(2);
+      } catch (err) {
+        fail('validate-c4', err);
       }
     });
 

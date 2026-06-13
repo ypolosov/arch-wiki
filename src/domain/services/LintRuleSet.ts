@@ -1,7 +1,7 @@
 import { ArtifactKind } from '../model/ArtifactType';
 import { RequiredSection } from '../model/ProjectConfigSchema';
 import { GraphSnapshot, inboundCounts, pagesOfKind } from '../model/Graph';
-import { kindOfPage, kindOfRelPath } from '../model/WikiPage';
+import { WikiPage, kindOfPage, kindOfRelPath } from '../model/WikiPage';
 import { levenshtein } from './Levenshtein';
 import { normalizeSection } from './WikilinkScanner';
 import { posixResolve } from './PathUtil';
@@ -87,6 +87,29 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
           message: `broken link to missing file: ${md}`,
         });
       }
+    }
+  }
+
+  // 2b. Duplicate basenames across folders collide in the wikilink graph
+  //     (`byBasename`) and in any basename-keyed projection (the Confluence mirror
+  //     resolves `[[wikilink]]` by basename) — so two pages sharing a basename are a
+  //     hard, deterministic defect. High.
+  const byName = new Map<string, WikiPage[]>();
+  for (const p of g.pages) {
+    const arr = byName.get(p.basename);
+    if (arr) arr.push(p);
+    else byName.set(p.basename, [p]);
+  }
+  for (const [name, ps] of byName) {
+    if (ps.length < 2) continue;
+    for (const p of ps) {
+      const others = ps.filter((o) => o.relPath !== p.relPath).map((o) => o.relPath).sort();
+      findings.push({
+        rule: 'duplicate-basename',
+        severity: 'high',
+        file: p.relPath,
+        message: `duplicate basename [[${name}]] also at ${others.join(', ')}`,
+      });
     }
   }
 

@@ -12,6 +12,13 @@ Read `docs/architecture/CLAUDE.md` and the `likec4-dsl` skill. Edit only `*.c4`
 sources under `docs/architecture/c4/src/` and the wikilink sections of wiki pages
 — never the `.likec4/*.snap` snapshots, never `raw/`.
 
+## Model source & authoritative verdict (read-only)
+Read the C4 model through the **LikeC4 MCP** (`read-project-summary`, `search-element`,
+`query-graph`) — read-only; you never mutate the model through it. The **drift verdict
+is deterministic**: pipe `read-project-summary` JSON to `arch-wiki validate-c4 --stdin`
+and treat its findings (C4 element ⟷ wiki entity) as truth — never eyeball
+consistency. You **PROPOSE** `*.c4` diffs; a human/PR applies them (Core/human owns the model).
+
 ## Tasks
 1. Inventory C4 elements/views from `c4/src/*.c4` (the top-level system, its
    subsystems, deployment nodes, and all declared views) — discover the names
