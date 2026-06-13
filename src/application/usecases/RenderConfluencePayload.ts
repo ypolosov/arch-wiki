@@ -7,8 +7,11 @@ import {
   CrossLink,
   DEFAULT_EXCLUDE,
   MirrorExclude,
+  ProtectedSpan,
+  extractGlossaryTerms,
   isPageExcluded,
   parentSourceOf,
+  protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
 } from '../../domain/services/ConfluenceTree';
@@ -24,10 +27,17 @@ export interface PageEnvelope {
   /** Parent page's source relPath, or null for the root. */
   parentSource: string | null;
   language: string | null;
-  /** Page body: wiki markdown with `[[wikilinks]]` resolved to cross-links. */
+  /**
+   * Page body. English markdown with `[[wikilinks]]` resolved to cross-links — UNLESS
+   * the mirror `language` is set, in which case structural spans (code, link URLs,
+   * artifact ids) are masked to `%%AWP<n>%%` placeholders for the translation step;
+   * restore them with `restore` (via `finalize-confluence`) before publishing.
+   */
   body: string;
   crossLinks: CrossLink[];
-  /** Canonical, date-free hash over title+parentSource+normalized body. */
+  /** Structural placeholders to restore after translation (empty when not translating). */
+  restore: ProtectedSpan[];
+  /** Canonical, date-free hash over title+parentSource+English body (+language when set). */
   contentHash: string;
   alreadyPublished: boolean;
   /** alreadyPublished && the ledgered hash differs (content changed → re-publish). */
@@ -38,6 +48,10 @@ export interface PageEnvelope {
 
 export interface MirrorPlan {
   spaceId: string;
+  /** Mirror presentation language (`confluence.language`), or null = publish English as-is. */
+  language: string | null;
+  /** Translation denylist (config preserveTerms + glossary bold terms); empty when not translating. */
+  preserveTerms: string[];
   pages: PageEnvelope[];
   /** Published-pages ledger rows whose source no longer maps to a live included page. */
   orphans: { page: string; source: string }[];
@@ -76,7 +90,7 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       2,
     );
   }
-  const language = deps.config.languageOrNull();
+  const language = conf?.language ?? null;
 
   const rawExclude = (conf as { exclude?: Partial<MirrorExclude> }).exclude;
   const exclude: MirrorExclude = {
@@ -86,6 +100,17 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
 
   const pages = await deps.repo.loadPages();
   const graph = buildGraph(pages);
+
+  // Translation denylist (only when translating): config preserveTerms + glossary bold terms.
+  let preserveTerms: string[] = [];
+  if (language) {
+    const configTerms = (conf as { preserveTerms?: string[] }).preserveTerms ?? [];
+    const glossaryPage = pages.find((p) => p.basename === 'glossary') ?? null;
+    const glossaryTerms = glossaryPage
+      ? extractGlossaryTerms((await deps.repo.readParsed(glossaryPage.relPath)).content)
+      : [];
+    preserveTerms = [...new Set([...configTerms, ...glossaryTerms])].sort((a, b) => a.localeCompare(b));
+  }
 
   const included = pages.filter((p) => !isPageExcluded(p, exclude));
   const includedSources = new Set(included.map((p) => p.relPath));
@@ -113,15 +138,27 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const envelopes = new Map<string, PageEnvelope>();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    const { body, crossLinks } = resolveCrossLinks(
+    const { body: englishBody, crossLinks } = resolveCrossLinks(
       normalizeBody(parsed.content),
       graph,
       publishedMap,
       includedSources,
+      spaceId, // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
     );
     const title = titleOf(p);
     const parentSource = parents.get(p.relPath) ?? null;
-    const contentHash = deps.hash(JSON.stringify({ title, parentSource, body }));
+    // Hash over the ENGLISH source (+ language when translating). Stable across runs
+    // (translation is not in the key → no oscillation); a non-translating wiki keeps the
+    // exact 0.5.x payload (no spurious drift on upgrade); enabling a language drifts once.
+    const contentHash = deps.hash(
+      JSON.stringify(
+        language ? { title, parentSource, body: englishBody, language } : { title, parentSource, body: englishBody },
+      ),
+    );
+    // Translating → mask structural spans for the LLM; else ship English as-is.
+    const { masked, restore } = language
+      ? protectStructuralSpans(englishBody)
+      : { masked: englishBody, restore: [] as ProtectedSpan[] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings = crossLinks.some((c) => !c.resolved)
       ? ['some cross-link targets are not yet published (rendered as plain text)']
@@ -133,8 +170,9 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       spaceId,
       parentSource,
       language,
-      body,
+      body: masked,
       crossLinks,
+      restore,
       contentHash,
       alreadyPublished,
       drifted: alreadyPublished && ledgerHash.get(p.relPath) !== contentHash,
@@ -149,5 +187,5 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     .map((r) => ({ page: r.page, source: r.source }))
     .sort((a, b) => a.source.localeCompare(b.source));
 
-  return { spaceId, pages: ordered, orphans };
+  return { spaceId, language, preserveTerms, pages: ordered, orphans };
 }

@@ -95,16 +95,21 @@ export function sortParentFirst(
 
 /**
  * Replace `[[wikilinks]]` in a page body with resolved cross-links. A target that
- * is a live, included, PUBLISHED page → a markdown link by Confluence page-id; an
- * unpublished/excluded/absent target → plain alias text (the placeholder rule).
- * Deterministic given (graph, publishedMap, includedSources): no fallback by title
- * (so the body does not oscillate between runs). Returns the body + cross-link log.
+ * is a live, included, PUBLISHED page → a markdown link to the page's ROOT-RELATIVE
+ * Confluence URL (`/wiki/spaces/<spaceKey>/pages/<id>`), which resolves from any
+ * page regardless of where this page lives; an unpublished/excluded/absent target →
+ * plain alias text (the placeholder rule). A bare page-id (the old form) published as
+ * markdown becomes a *relative* `href` and 404s — hence the absolute-from-site-root
+ * path. Deterministic given (graph, publishedMap, includedSources, spaceKey): no
+ * fallback by title (so the body does not oscillate between runs). Returns the body +
+ * cross-link log.
  */
 export function resolveCrossLinks(
   content: string,
   g: GraphSnapshot,
   publishedMap: ReadonlyMap<string, string>, // source relPath → Confluence page id
   includedSources: ReadonlySet<string>,
+  spaceKey: string, // Confluence space key, for the root-relative cross-link URL
 ): { body: string; crossLinks: CrossLink[] } {
   const crossLinks: CrossLink[] = [];
   const body = content.replace(WIKILINK_RE, (_m, _bang, target: string, alias?: string) => {
@@ -113,10 +118,94 @@ export function resolveCrossLinks(
     const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : undefined;
     if (pageId) {
       crossLinks.push({ target, resolved: true, pageId });
-      return `[${label}](${pageId})`;
+      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
     }
     crossLinks.push({ target, resolved: false });
     return label;
   });
   return { body, crossLinks };
+}
+
+// ---------------------------------------------------------------------------
+// CAP-2 RU projection (v0.6, plan §13). The Confluence mirror may be a TRANSLATED
+// presentation projection (canon stays English in Layer-2). Translation is the LLM
+// map-step (invariant #6) — but STRUCTURAL tokens that must survive byte-exact (code,
+// markdown link URLs incl. the resolved /wiki cross-links, artifact-id tokens) are
+// protected DETERMINISTICALLY by Core: render masks them to opaque placeholders, the
+// LLM translates the surrounding prose, and `finalize-confluence` restores them. The
+// hash stays over the ENGLISH source (drift stability), so translation never oscillates.
+// ---------------------------------------------------------------------------
+
+export interface ProtectedSpan {
+  /** Opaque placeholder substituted into the body (kept verbatim through translation). */
+  token: string;
+  /** The exact English span it replaced (restored after translation). */
+  original: string;
+}
+
+const PROTECT_PREFIX = '%%AWP';
+const PROTECT_SUFFIX = '%%';
+
+// Ordered structural maskers. Code FIRST (so backticks/links/ids inside code are not
+// re-masked), then markdown link URLs (the bare url inside `](…)`), then artifact-id
+// tokens (CONC before CON so the longer prefix wins). Each pass masks left-to-right.
+const STRUCTURAL_PATTERNS: readonly RegExp[] = [
+  /```[\s\S]*?```/g, // fenced code blocks
+  /`[^`\n]+`/g, // inline code
+  /(?<=\]\()[^)\s]+(?=\))/g, // markdown/image link URL
+  /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g, // artifact-id tokens
+];
+
+/**
+ * Replace structural spans (code, link URLs, artifact ids) with opaque `%%AWP<n>%%`
+ * placeholders so an LLM translation pass cannot alter them. Deterministic: the same
+ * English body always yields the same masked text + ordered restore map. Pure.
+ */
+export function protectStructuralSpans(body: string): { masked: string; restore: ProtectedSpan[] } {
+  const restore: ProtectedSpan[] = [];
+  let masked = body;
+  let n = 0;
+  for (const re of STRUCTURAL_PATTERNS) {
+    masked = masked.replace(re, (m) => {
+      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
+      n += 1;
+      restore.push({ token, original: m });
+      return token;
+    });
+  }
+  return { masked, restore };
+}
+
+/**
+ * Substitute protected placeholders back into a (translated) body. Reports any token
+ * the translation dropped (`missing`) so the caller can refuse to publish a page that
+ * lost protected content. Pure; order-independent (originals never contain tokens).
+ */
+export function applyRestore(
+  text: string,
+  restore: readonly ProtectedSpan[],
+): { body: string; missing: string[] } {
+  let body = text;
+  const missing: string[] = [];
+  for (const { token, original } of restore) {
+    if (!body.includes(token)) {
+      missing.push(token);
+      continue;
+    }
+    body = body.split(token).join(original);
+  }
+  return { body, missing };
+}
+
+/**
+ * Best-effort glossary terms = every **bold** span in `glossary.md`. These are merged
+ * into the translation denylist (`preserveTerms`) so domain/IT terms stay English. Pure.
+ */
+export function extractGlossaryTerms(glossaryMarkdown: string): string[] {
+  const terms = new Set<string>();
+  for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
+    const t = m[1]!.trim();
+    if (t) terms.add(t);
+  }
+  return [...terms].sort((a, b) => a.localeCompare(b));
 }

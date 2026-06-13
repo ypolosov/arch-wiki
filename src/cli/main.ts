@@ -24,6 +24,7 @@ import { recordStorySnapshot } from '../application/usecases/RecordStorySnapshot
 import { pruneStorySnapshots } from '../application/usecases/PruneStorySnapshots';
 import { renderConfluencePayload } from '../application/usecases/RenderConfluencePayload';
 import { recordPage } from '../application/usecases/RecordPage';
+import { applyRestore, ProtectedSpan } from '../domain/services/ConfluenceTree';
 import { enrichDriver } from '../application/usecases/EnrichDriver';
 import { BooksRagPlanner } from '../adapters/rag/BooksRagPlanner';
 import { BooksAnswer, BooksQueryInput } from '../application/ports/BooksRagPort';
@@ -409,7 +410,7 @@ async function main(): Promise<void> {
     .command('record-story', 'write a READ-ONLY User Story snapshot into raw/_synced (body via stdin)')
     .option('--page <id>', 'upstream Confluence page id')
     .option('--title <title>', 'story title')
-    .option('--version <n>', 'upstream page version')
+    .option('--page-version <n>', 'upstream Confluence page version (cac reserves --version)')
     .option('--parent <id>', 'parent page id')
     .option('--slug <slug>', 'explicit kebab slug (for non-latin titles)')
     .action(async (opts: GlobalOpts & Record<string, unknown>) => {
@@ -423,7 +424,7 @@ async function main(): Promise<void> {
           {
             pageId: String(opts.page),
             title: String(opts.title),
-            version: opts.version != null ? Number(opts.version) : 0,
+            version: opts.pageVersion != null ? Number(opts.pageVersion) : 0,
             body,
             parentId: opts.parent != null ? String(opts.parent) : undefined,
             slug: opts.slug as string | undefined,
@@ -445,6 +446,7 @@ async function main(): Promise<void> {
   cli
     .command('prune-stories', 'orphan-reconcile pulled snapshots against the live upstream page-id set')
     .option('--live <ids>', 'comma-separated upstream page-ids still present (empty = prune all)')
+    .option('--commit', 'delete the orphan snapshots + ledger rows (default: plan only — deletes nothing)')
     .action(async (opts: GlobalOpts & Record<string, unknown>) => {
       try {
         if (opts.live == null) {
@@ -452,10 +454,14 @@ async function main(): Promise<void> {
         }
         const fs = new NodeFileSystem();
         const root = wikiRoot(opts);
-        const result = await pruneStorySnapshots(csv(opts.live), {
-          repo: new FoamWikiRepository(root, fs),
-          ledger: new FileLedgerStore(root, fs),
-        });
+        const result = await pruneStorySnapshots(
+          csv(opts.live),
+          {
+            repo: new FoamWikiRepository(root, fs),
+            ledger: new FileLedgerStore(root, fs),
+          },
+          { commit: !!opts.commit },
+        );
         emit({ ok: true, command: 'prune-stories', data: result });
       } catch (err) {
         fail('prune-stories', err);
@@ -515,6 +521,43 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'record-page', data: result });
       } catch (err) {
         fail('record-page', err);
+      }
+    });
+
+  cli
+    .command('finalize-confluence', 'restore protected spans into a TRANSLATED Confluence page body (CAP-2 RU)')
+    .option('--source <path>', 'wiki source path of the page (key into the render-confluence plan)')
+    .option('--plan <file>', 'the saved `render-confluence --all` plan JSON (carries each page restore map)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.source) throw new DomainError('finalize-confluence: missing --source', 1);
+        if (!opts.plan) throw new DomainError('finalize-confluence: missing --plan', 1);
+        const fs = new NodeFileSystem();
+        const planArg = String(opts.plan);
+        const planText = await fs.readFile(
+          path.isAbsolute(planArg) ? planArg : path.join(opts.cwd ?? process.cwd(), planArg),
+        );
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(planText);
+        } catch (e) {
+          throw new DomainError(`finalize-confluence: malformed plan JSON: ${(e as Error).message}`, 2);
+        }
+        const env = parsed as { data?: { pages?: unknown }; pages?: unknown };
+        const pages = (env.data?.pages ?? env.pages) as
+          | Array<{ source: string; restore?: ProtectedSpan[] }>
+          | undefined;
+        if (!Array.isArray(pages)) throw new DomainError('finalize-confluence: plan has no data.pages[]', 2);
+        const page = pages.find((p) => p.source === String(opts.source));
+        if (!page) {
+          throw new DomainError(`finalize-confluence: no page with source "${opts.source}" in the plan`, 2);
+        }
+        const translated = await readStdin();
+        const { body, missing } = applyRestore(translated, page.restore ?? []);
+        emit({ ok: missing.length === 0, command: 'finalize-confluence', data: { body, missing } });
+        if (missing.length > 0) process.exit(2);
+      } catch (err) {
+        fail('finalize-confluence', err);
       }
     });
 
@@ -671,8 +714,19 @@ async function main(): Promise<void> {
 
         let model: C4Model;
         if (source === 'regex') {
-          // Lossy last-resort: read *.c4 under the configured c4 dir (throws exit 2 if no [c4]).
-          const c4dir = path.join(root, config.c4().dir);
+          // Lossy last-resort: read *.c4 under the configured c4 dir.
+          let c4SourceDir: string;
+          try {
+            c4SourceDir = config.c4().dir;
+          } catch {
+            throw new DomainError(
+              'validate-c4 --source regex needs a [c4] config (e.g. {"c4":{"dir":"c4/src"}} in ' +
+                '.arch-wiki/config.json); or use --stdin / --model-json (LikeC4 MCP / `likec4 export ' +
+                'json`), which need no [c4] config',
+              2,
+            );
+          }
+          const c4dir = path.join(root, c4SourceDir);
           const files = (await fs.exists(c4dir)) ? (await fs.walk(c4dir)).filter((f) => f.endsWith('.c4')) : [];
           const text = (await Promise.all(files.map((f) => fs.readFile(f)))).join('\n');
           model = parseC4Sources(text);

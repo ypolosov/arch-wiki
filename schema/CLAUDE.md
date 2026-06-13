@@ -162,6 +162,20 @@ declared in the target's `.mcp.json` or at user scope — **never hardcode secre
 pass them as `${ENV}`. Commands that need one (`render-issue`, `publish`) first
 `ToolSearch` for it and stop with this setup hint if absent.
 
+> **Restart after a plugin update.** The `arch-wiki` binary on `PATH` and the MCP tool
+> registry are both resolved **at session start**. After `claude plugin update …`, the
+> previous CLI version keeps answering until you restart the session (verify with
+> `arch-wiki version` — or call the new version by full path); likewise a newly-added MCP
+> server exposes its tools only after a restart. Use **one MCP server name per endpoint**
+> — several servers pointing at the same endpoint register the tools of only one.
+
+**Confluence mirror language (`/arch-wiki:publish`).** By default the mirror is published in English
+(the wiki canon). Set `integrations.confluence.language` (e.g. `"ru"`) to publish a TRANSLATED
+projection: the canon stays English in `docs/architecture/**`, and `publish` translates prose / headings /
+link-labels at publish time while Core protects structural spans (code, link URLs, artifact ids) and keeps
+every term in `integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — verbatim.
+The content hash is over the English source, so a translated mirror never drifts on its own.
+
 **Foam MCP** and **LikeC4 MCP** are **read-only navigation aids** (Foam: wikilinks /
 backlinks / tags graph; LikeC4: `read-project-summary` / `search-element` /
 `query-graph`). They help humans/agents explore — they are **NOT authoritative**.

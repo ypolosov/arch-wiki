@@ -93,6 +93,12 @@ const IntegrationsSchema = z
       .object({
         space: z.string(),
         cloudId: z.string(),
+        // CAP-2 RU projection (v0.6, plan §13): when `language` is set the mirror is a
+        // translated PRESENTATION projection (canon stays English in Layer-2). Absent →
+        // publish English as-is (backward-compatible). `preserveTerms` is a denylist of
+        // terms the translation must keep verbatim (Core also merges glossary.md bold terms).
+        language: z.string().min(2),
+        preserveTerms: z.array(z.string().min(1)),
         // CAP-2 visibility filter: ADR statuses + register basenames hidden from the
         // stakeholder mirror (per-page frontmatter `confluence`/`audience` overrides).
         exclude: z

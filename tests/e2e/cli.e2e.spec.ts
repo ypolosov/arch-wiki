@@ -297,6 +297,24 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(findings.some((f) => f.rule === 'c4-element-without-wiki-entity' && f.message.includes('cloud.db'))).toBe(true);
   });
 
+  it('validate-c4 --source regex without a [c4] config exits 2 with a self-explanatory hint', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(wiki, { recursive: true });
+    let exitCode = 0;
+    let stderr = '';
+    try {
+      execFileSync('node', [CLI, 'validate-c4', '--source', 'regex', '--cwd', root], { cwd: root, encoding: 'utf8' });
+    } catch (e: unknown) {
+      const err = e as { status: number; stderr: string };
+      exitCode = err.status;
+      stderr = err.stderr;
+    }
+    expect(exitCode).toBe(2);
+    // The error names this command and the minimal fix — not the generic cartographer message.
+    expect(stderr).toContain('validate-c4 --source regex needs a [c4] config');
+    expect(stderr).toContain('--stdin');
+  });
+
   it('CAP-1: pull-stories plan, record-story (stdin) into raw/_synced, idempotent, prune', async () => {
     const wiki = path.join(root, 'docs/architecture');
     await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
@@ -310,7 +328,7 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect((plan.data as { rootPageId: string }).rootPageId).toBe('16121885');
 
     const rec = JSON.parse(
-      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--version', '3', '--cwd', root], {
+      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--page-version', '3', '--cwd', root], {
         cwd: root,
         encoding: 'utf8',
         input: 'As a user I can log in.\n',
@@ -324,10 +342,12 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     const snap = await fs.readFile(path.join(wiki, 'raw/_synced/user-story-log/777-brand-login.md'), 'utf8');
     expect(snap).toContain('source: confluence');
     expect(snap).toContain('As a user I can log in.');
+    // --page-version is captured (cac reserves --version, so the flag was renamed).
+    expect(snap).toContain('version: 3');
 
     // Idempotent re-pull.
     const again = JSON.parse(
-      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--version', '3', '--cwd', root], {
+      execFileSync('node', [CLI, 'record-story', '--page', '777', '--title', 'Brand Login', '--page-version', '3', '--cwd', root], {
         cwd: root,
         encoding: 'utf8',
         input: 'As a user I can log in.\n',
@@ -338,11 +358,23 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     ) as Envelope;
     expect((again.data as { written: boolean }).written).toBe(false);
 
-    // Prune against a live set that no longer contains 777 → it is reconciled away.
-    const pruned = run(['prune-stories', '--live', '999', '--cwd', root], root);
+    // Prune against a live set that no longer contains 777. Plan-by-default: 777 is listed
+    // but nothing is deleted.
+    const snapPath = path.join(wiki, 'raw/_synced/user-story-log/777-brand-login.md');
+    const plannedPrune = run(['prune-stories', '--live', '999', '--cwd', root], root);
+    expect((plannedPrune.data as { committed: boolean }).committed).toBe(false);
+    expect((plannedPrune.data as { pruned: Array<{ pageId: string }> }).pruned).toEqual([
+      { pageId: '777', relPath: 'raw/_synced/user-story-log/777-brand-login.md' },
+    ]);
+    await expect(fs.access(snapPath)).resolves.toBeUndefined(); // still there
+
+    // --commit actually reconciles it away.
+    const pruned = run(['prune-stories', '--live', '999', '--commit', '--cwd', root], root);
+    expect((pruned.data as { committed: boolean }).committed).toBe(true);
     expect((pruned.data as { pruned: Array<{ pageId: string }> }).pruned).toEqual([
       { pageId: '777', relPath: 'raw/_synced/user-story-log/777-brand-login.md' },
     ]);
+    await expect(fs.access(snapPath)).rejects.toBeTruthy(); // gone
   });
 
   it('CAP-2: render-confluence mirror plan + record-page idempotency', async () => {
@@ -373,5 +405,60 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
       (p) => p.source === 'entities/cache.md',
     )!;
     expect(cache2.alreadyPublished).toBe(true);
+  });
+
+  it('CAP-2 RU: finalize-confluence restores protected spans into a translated body', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, '.arch-wiki/config.json'),
+      JSON.stringify({ integrations: { confluence: { space: 'PP', language: 'ru', preserveTerms: ['wager'] } } }),
+    );
+    await fs.writeFile(path.join(wiki, 'index.md'), '# Wiki\n');
+    await fs.mkdir(path.join(wiki, 'drivers/use-cases'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, 'drivers/use-cases/UC-014-login.md'),
+      '---\ntype: use-case\n---\n# UC-014: Login\n\nRun `npm test` for UC-014.\n',
+    );
+
+    const planFile = path.join(root, 'mirror.json');
+    const plan = run(['render-confluence', '--all', '--cwd', root], root);
+    expect((plan.data as { language: string }).language).toBe('ru');
+    await fs.writeFile(planFile, JSON.stringify(plan));
+    const uc = (plan.data.pages as Array<{ source: string; body: string }>).find((p) =>
+      p.source.includes('UC-014'),
+    )!;
+    expect(uc.body).toMatch(/%%AWP\d+%%/); // structural spans masked for translation
+
+    // Simulate translation: change prose, keep %%AWP..%% placeholders verbatim.
+    const translated = uc.body.replace('Run', 'Запусти').replace(' for ', ' для ');
+    const fin = JSON.parse(
+      execFileSync('node', [CLI, 'finalize-confluence', '--source', uc.source, '--plan', planFile, '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+        input: translated,
+      })
+        .trim()
+        .split('\n')
+        .pop()!,
+    ) as Envelope;
+    expect((fin.data as { missing: string[] }).missing).toEqual([]);
+    const finalBody = (fin.data as { body: string }).body;
+    expect(finalBody).toContain('npm test'); // code restored byte-exact
+    expect(finalBody).toContain('UC-014'); // id restored byte-exact
+    expect(finalBody).toContain('Запусти'); // translation preserved
+
+    // A translation that drops a placeholder → exit 2 (never publish lost protected content).
+    let exitCode = 0;
+    try {
+      execFileSync('node', [CLI, 'finalize-confluence', '--source', uc.source, '--plan', planFile, '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+        input: 'no placeholders here',
+      });
+    } catch (e: unknown) {
+      exitCode = (e as { status: number }).status;
+    }
+    expect(exitCode).toBe(2);
   });
 });

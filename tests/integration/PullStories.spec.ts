@@ -106,13 +106,22 @@ describe('CAP-1 pull-stories ingress (integration)', () => {
     ).rejects.toMatchObject({ exitCode: 2 });
   });
 
-  it('prune-stories removes snapshots + ledger rows for pages absent from the live set', async () => {
+  it('prune-stories plans by default (lists orphans, deletes nothing); --commit deletes', async () => {
     const root = await tmpRoot();
     const d = deps(root);
     const keep = await recordStorySnapshot({ pageId: 'A', title: 'Keep', version: 1, body: 'a\n' }, d);
     const drop = await recordStorySnapshot({ pageId: 'B', title: 'Drop', version: 1, body: 'b\n' }, d);
 
-    const res = await pruneStorySnapshots(['A'], d);
+    // Plan (default): orphan B is listed but neither the file nor the ledger row is touched.
+    const plan = await pruneStorySnapshots(['A'], d);
+    expect(plan.committed).toBe(false);
+    expect(plan.pruned).toEqual([{ pageId: 'B', relPath: drop.relPath }]);
+    expect((await d.ledger.readPulled()).map((r) => r.pageId)).toEqual(['A', 'B']);
+    await expect(fs.access(path.join(root, drop.relPath))).resolves.toBeUndefined();
+
+    // Commit: now B's snapshot + ledger row are removed; A is untouched.
+    const res = await pruneStorySnapshots(['A'], d, { commit: true });
+    expect(res.committed).toBe(true);
     expect(res.pruned).toEqual([{ pageId: 'B', relPath: drop.relPath }]);
     expect((await d.ledger.readPulled()).map((r) => r.pageId)).toEqual(['A']);
     await expect(fs.access(path.join(root, drop.relPath))).rejects.toBeTruthy();

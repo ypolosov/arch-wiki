@@ -58,12 +58,14 @@ arch-wiki doctor                  # ok:true, pluginVersion 0.5.0
 2. `ToolSearch "mcp confluence"` (atlassian). `getConfluencePageDescendants(cloudId, 16121885, depth 2)`,
    пагинация по `cursor`. Оставь детей с title, начинающимся на `Story:`. Собери их page-id = LIVE-набор.
 3. На каждую Story: `getConfluencePage(..., contentFormat: markdown)` → **передай тело в stdin**:
-   `arch-wiki record-story --page <id> --title "<title>" --version <v> [--parent <id>] [--slug <s>]`.
+   `arch-wiki record-story --page <id> --title "<title>" --page-version <v> [--parent <id>] [--slug <s>]`
+   (`--page-version` = Confluence `version.number`; `cac` резервирует `--version`).
    Для русских/нелатинских заголовков **обязателен `--slug`**. Идемпотентно: повтор без изменений → `written:false`.
 4. Проверь: появились `docs/architecture/raw/_synced/user-story-log/<id>-<slug>.md` (read-only машинные снапшоты,
    frontmatter `source: confluence`), и `docs/architecture/.arch-wiki/pulled-sources.json`.
-5. Orphan-reconcile (human-gate): `arch-wiki prune-stories --live <comma-sep live page-ids>` — покажи список
-   на удаление человеку перед подтверждением.
+5. Orphan-reconcile (human-gate): `arch-wiki prune-stories --live <comma-sep live page-ids>` — **план по
+   умолчанию** (печатает orphan'ов, `committed:false`, ничего не удаляет). Покажи список человеку, затем
+   удали явно: `arch-wiki prune-stories --live <ids> --commit`.
 6. Затем обычный ingest: `/arch-wiki:ingest raw/_synced/user-story-log/` — **дедуп**: если драйвер уже имеет
    `source:` на снапшот, SKIP/UPDATE по выбору SA, не плодить дубликат. User Story Log — advisory, драйверы — канон.
 - **Safety:** `raw/_synced/` машинно-владеемая, ручные правки блокирует guard-хук. Реверт: `git clean/checkout` по `raw/_synced/` и `.arch-wiki/pulled-sources.json`.

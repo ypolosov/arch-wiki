@@ -10,6 +10,7 @@ import { ProjectConfig } from '../../src/domain/services/ProjectConfig';
 import { ProjectConfigSchema } from '../../src/domain/model/ProjectConfigSchema';
 import { renderConfluencePayload } from '../../src/application/usecases/RenderConfluencePayload';
 import { recordPage } from '../../src/application/usecases/RecordPage';
+import { applyRestore } from '../../src/domain/services/ConfluenceTree';
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 const clock = { now: () => new Date('2026-06-08T00:00:00Z') };
@@ -76,7 +77,7 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
 
     const plan2 = await renderConfluencePayload(d);
     const qa1b = plan2.pages.find((p) => p.basename === 'QA-001-latency')!;
-    expect(qa1b.body).toContain('[QA-002-throughput](999)');
+    expect(qa1b.body).toContain('[QA-002-throughput](/wiki/spaces/PP/pages/999)');
     const qa2b = plan2.pages.find((p) => p.basename === 'QA-002-throughput')!;
     expect(qa2b.alreadyPublished).toBe(true);
     expect(qa2b.drifted).toBe(false);
@@ -108,5 +109,42 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(del.ledgerRemoved).toBe(true);
     const after = await renderConfluencePayload(d);
     expect(after.orphans).toEqual([]);
+  });
+
+  it('RU projection: masks spans, emits language + merged preserveTerms, hash adds language and is stable', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(path.join(root, 'glossary.md'), '# Glossary\n\n- **sweepstakes** — the model\n');
+    const ruConfig = ProjectConfig.from(
+      ProjectConfigSchema.parse({
+        integrations: { confluence: { space: 'PP', language: 'ru', preserveTerms: ['wager'] } },
+      }),
+    );
+    const dRu = {
+      repo: new FoamWikiRepository(root, sys),
+      ledger: new FileLedgerStore(root, sys),
+      config: ruConfig,
+      hash: sha256,
+      frontmatter: new GrayMatterParser(),
+      clock,
+    };
+
+    const plan = await renderConfluencePayload(dRu);
+    expect(plan.language).toBe('ru');
+    expect(plan.preserveTerms).toEqual(['sweepstakes', 'wager']); // config + glossary, deduped+sorted
+
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.body).toMatch(/%%AWP\d+%%/); // structural spans masked for translation
+    expect(qa1.restore.length).toBeGreaterThan(0);
+    const { body: english, missing } = applyRestore(qa1.body, qa1.restore);
+    expect(missing).toEqual([]);
+    expect(english).toContain('QA-001'); // id restored byte-exact
+
+    // enabling RU drifts the hash once (vs the English render), then is stable across runs
+    const en = await renderConfluencePayload(deps(root));
+    const qa1en = en.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.contentHash).not.toBe(qa1en.contentHash);
+    const plan2 = await renderConfluencePayload(dRu);
+    expect(plan2.pages.find((p) => p.basename === 'QA-001-latency')!.contentHash).toBe(qa1.contentHash);
   });
 });

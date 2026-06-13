@@ -16,10 +16,12 @@ never Edit/Write it by hand.
    `cursor` until exhausted, ~50 pages, depth 1–2). Keep those whose title starts with
    `childTitlePrefix`. Collect their page-ids as the LIVE set.
 4. For each live story: `getConfluencePage(..., contentFormat: markdown)` → pipe the body to
-   `arch-wiki record-story --page <id> --title <title> --version <v> [--parent <id>] [--slug <s>]`.
-   Use `--slug` for non-latin titles. Idempotent: unchanged → no-op; changed → `drifted:true`.
-5. **Orphan reconcile (human-gated):** `arch-wiki prune-stories --live <comma-sep live page-ids>`
-   deletes snapshots + ledger rows for stories that disappeared upstream. Show the prune list
-   to the SA before confirming.
+   `arch-wiki record-story --page <id> --title <title> --page-version <v> [--parent <id>] [--slug <s>]`
+   (`--page-version` = the page's Confluence `version.number`; `cac` reserves `--version`). Use `--slug`
+   for non-latin titles. Idempotent: unchanged → no-op; changed → `drifted:true`.
+5. **Orphan reconcile (human-gated):** `arch-wiki prune-stories --live <comma-sep live page-ids>` is a
+   **plan by default** — it lists the orphan snapshots (stories that disappeared upstream) and deletes
+   nothing. Show that list to the SA, then re-run with `--commit` to actually delete the snapshots +
+   ledger rows.
 6. Report pulled/unchanged/drifted/pruned counts and remind: run
    `/arch-wiki:ingest raw/_synced/user-story-log/` to turn stories into UC/QA/CON drivers.

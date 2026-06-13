@@ -4,8 +4,11 @@ import { WikiPage } from '../../src/domain/model/WikiPage';
 import { scanPage } from '../../src/domain/services/WikilinkScanner';
 import {
   DEFAULT_EXCLUDE,
+  applyRestore,
+  extractGlossaryTerms,
   isPageExcluded,
   parentSourceOf,
+  protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
 } from '../../src/domain/services/ConfluenceTree';
@@ -80,7 +83,7 @@ describe('ConfluenceTree.sortParentFirst', () => {
 });
 
 describe('ConfluenceTree.resolveCrossLinks', () => {
-  it('renders published targets as page-id links and unpublished ones as plain text', () => {
+  it('renders published targets as root-relative /wiki links and unpublished ones as plain text', () => {
     const g = buildGraph([page('drivers/quality-attributes/QA-001-latency.md'), page('entities/cache.md')]);
     const published = new Map<string, string>([['drivers/quality-attributes/QA-001-latency.md', '12345']]);
     const included = new Set(['drivers/quality-attributes/QA-001-latency.md', 'entities/cache.md']);
@@ -89,12 +92,64 @@ describe('ConfluenceTree.resolveCrossLinks', () => {
       g,
       published,
       included,
+      'PP',
     );
-    expect(body).toBe('See [QA-001](12345) and cache and ghost.');
+    // Root-relative URL (not a bare page-id, which would 404 as a relative href).
+    expect(body).toBe('See [QA-001](/wiki/spaces/PP/pages/12345) and cache and ghost.');
     expect(crossLinks).toEqual([
       { target: 'QA-001-latency', resolved: true, pageId: '12345' },
       { target: 'cache', resolved: false },
       { target: 'ghost', resolved: false },
     ]);
+  });
+});
+
+describe('ConfluenceTree.protectStructuralSpans + applyRestore (CAP-2 RU)', () => {
+  const body = [
+    '# UC-014: Login',
+    '',
+    'See [UC-014 · Login](/wiki/spaces/SD/pages/123) and run `npm test`.',
+    '',
+    '```ts',
+    'const x = 1;',
+    '```',
+  ].join('\n');
+
+  it('masks code, link URLs and artifact ids; restore is an exact round-trip', () => {
+    const { masked, restore } = protectStructuralSpans(body);
+    // structural spans are gone from the text handed to translation
+    expect(masked).not.toContain('/wiki/spaces/SD/pages/123');
+    expect(masked).not.toContain('npm test');
+    expect(masked).not.toContain('const x = 1;');
+    expect(masked).toMatch(/%%AWP\d+%%/);
+    // prose survives for translation
+    expect(masked).toContain('Login');
+    // exact round-trip
+    const { body: restored, missing } = applyRestore(masked, restore);
+    expect(restored).toBe(body);
+    expect(missing).toEqual([]);
+  });
+
+  it('survives a translation that keeps placeholders verbatim', () => {
+    const src = 'Open [Latency](/wiki/spaces/SD/pages/9) — see UC-014.';
+    const { masked, restore } = protectStructuralSpans(src);
+    const translated = masked.replace('Open', 'Открой').replace('see', 'см.'); // prose → RU, tokens kept
+    const { body: out, missing } = applyRestore(translated, restore);
+    expect(missing).toEqual([]);
+    expect(out).toBe('Открой [Latency](/wiki/spaces/SD/pages/9) — см. UC-014.');
+  });
+
+  it('reports a dropped placeholder as missing (never silently loses protected content)', () => {
+    const { restore } = protectStructuralSpans('run `build` now');
+    expect(restore).toHaveLength(1);
+    const { missing } = applyRestore('run now', restore); // translator dropped the token
+    expect(missing).toEqual(restore.map((r) => r.token));
+  });
+});
+
+describe('ConfluenceTree.extractGlossaryTerms', () => {
+  it('collects bold terms, deduped + sorted', () => {
+    const md = '# Glossary\n\n- **wager** — a bet\n- **KYC** — identity check\n- **wager** again\n';
+    expect(extractGlossaryTerms(md)).toEqual(['KYC', 'wager']);
   });
 });

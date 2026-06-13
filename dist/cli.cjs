@@ -8664,6 +8664,12 @@ var IntegrationsSchema = external_exports.object({
   confluence: external_exports.object({
     space: external_exports.string(),
     cloudId: external_exports.string(),
+    // CAP-2 RU projection (v0.6, plan §13): when `language` is set the mirror is a
+    // translated PRESENTATION projection (canon stays English in Layer-2). Absent →
+    // publish English as-is (backward-compatible). `preserveTerms` is a denylist of
+    // terms the translation must keep verbatim (Core also merges glossary.md bold terms).
+    language: external_exports.string().min(2),
+    preserveTerms: external_exports.array(external_exports.string().min(1)),
     // CAP-2 visibility filter: ADR statuses + register basenames hidden from the
     // stakeholder mirror (per-page frontmatter `confluence`/`audience` overrides).
     exclude: external_exports.object({
@@ -9504,15 +9510,19 @@ async function recordStorySnapshot(input, deps) {
 }
 
 // src/application/usecases/PruneStorySnapshots.ts
-async function pruneStorySnapshots(livePageIds, deps) {
+async function pruneStorySnapshots(livePageIds, deps, options2 = {}) {
+  const commit = options2.commit === true;
   const live = new Set(livePageIds);
   const rows = await deps.ledger.readPulled();
   const orphans = rows.filter((r) => !live.has(r.pageId));
-  for (const o of orphans) {
-    await deps.repo.deleteFile(o.relPath);
-    await deps.ledger.removePulled(o.pageId);
+  if (commit) {
+    for (const o of orphans) {
+      await deps.repo.deleteFile(o.relPath);
+      await deps.ledger.removePulled(o.pageId);
+    }
   }
   return {
+    committed: commit,
     pruned: orphans.map((o) => ({ pageId: o.pageId, relPath: o.relPath })).sort((a, b) => a.pageId.localeCompare(b.pageId))
   };
 }
@@ -9559,7 +9569,7 @@ function sortParentFirst(relPaths, parents) {
     (a, b) => depthOf(a, parents) - depthOf(b, parents) || a.localeCompare(b)
   );
 }
-function resolveCrossLinks(content, g, publishedMap, includedSources) {
+function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey) {
   const crossLinks = [];
   const body = content.replace(WIKILINK_RE, (_m, _bang, target, alias) => {
     const label = (alias ?? target).trim();
@@ -9567,12 +9577,58 @@ function resolveCrossLinks(content, g, publishedMap, includedSources) {
     const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : void 0;
     if (pageId) {
       crossLinks.push({ target, resolved: true, pageId });
-      return `[${label}](${pageId})`;
+      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
     }
     crossLinks.push({ target, resolved: false });
     return label;
   });
   return { body, crossLinks };
+}
+var PROTECT_PREFIX = "%%AWP";
+var PROTECT_SUFFIX = "%%";
+var STRUCTURAL_PATTERNS = [
+  /```[\s\S]*?```/g,
+  // fenced code blocks
+  /`[^`\n]+`/g,
+  // inline code
+  /(?<=\]\()[^)\s]+(?=\))/g,
+  // markdown/image link URL
+  /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g
+  // artifact-id tokens
+];
+function protectStructuralSpans(body) {
+  const restore = [];
+  let masked = body;
+  let n = 0;
+  for (const re of STRUCTURAL_PATTERNS) {
+    masked = masked.replace(re, (m) => {
+      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
+      n += 1;
+      restore.push({ token, original: m });
+      return token;
+    });
+  }
+  return { masked, restore };
+}
+function applyRestore(text, restore) {
+  let body = text;
+  const missing = [];
+  for (const { token, original } of restore) {
+    if (!body.includes(token)) {
+      missing.push(token);
+      continue;
+    }
+    body = body.split(token).join(original);
+  }
+  return { body, missing };
+}
+function extractGlossaryTerms(glossaryMarkdown) {
+  const terms = /* @__PURE__ */ new Set();
+  for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
+    const t = m[1].trim();
+    if (t) terms.add(t);
+  }
+  return [...terms].sort((a, b) => a.localeCompare(b));
 }
 
 // src/application/usecases/RenderConfluencePayload.ts
@@ -9592,7 +9648,7 @@ async function renderConfluencePayload(deps) {
       2
     );
   }
-  const language = deps.config.languageOrNull();
+  const language = conf?.language ?? null;
   const rawExclude = conf.exclude;
   const exclude = {
     statuses: rawExclude?.statuses ?? DEFAULT_EXCLUDE.statuses,
@@ -9600,6 +9656,13 @@ async function renderConfluencePayload(deps) {
   };
   const pages = await deps.repo.loadPages();
   const graph = buildGraph(pages);
+  let preserveTerms = [];
+  if (language) {
+    const configTerms = conf.preserveTerms ?? [];
+    const glossaryPage = pages.find((p) => p.basename === "glossary") ?? null;
+    const glossaryTerms = glossaryPage ? extractGlossaryTerms((await deps.repo.readParsed(glossaryPage.relPath)).content) : [];
+    preserveTerms = [.../* @__PURE__ */ new Set([...configTerms, ...glossaryTerms])].sort((a, b) => a.localeCompare(b));
+  }
   const included = pages.filter((p) => !isPageExcluded(p, exclude));
   const includedSources = new Set(included.map((p) => p.relPath));
   const hubMap = /* @__PURE__ */ new Map();
@@ -9622,15 +9685,22 @@ async function renderConfluencePayload(deps) {
   const envelopes = /* @__PURE__ */ new Map();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    const { body, crossLinks } = resolveCrossLinks(
+    const { body: englishBody, crossLinks } = resolveCrossLinks(
       normalizeBody2(parsed.content),
       graph,
       publishedMap,
-      includedSources
+      includedSources,
+      spaceId
+      // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
     );
     const title = titleOf(p);
     const parentSource = parents.get(p.relPath) ?? null;
-    const contentHash = deps.hash(JSON.stringify({ title, parentSource, body }));
+    const contentHash = deps.hash(
+      JSON.stringify(
+        language ? { title, parentSource, body: englishBody, language } : { title, parentSource, body: englishBody }
+      )
+    );
+    const { masked, restore } = language ? protectStructuralSpans(englishBody) : { masked: englishBody, restore: [] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings = crossLinks.some((c) => !c.resolved) ? ["some cross-link targets are not yet published (rendered as plain text)"] : [];
     envelopes.set(p.relPath, {
@@ -9640,8 +9710,9 @@ async function renderConfluencePayload(deps) {
       spaceId,
       parentSource,
       language,
-      body,
+      body: masked,
       crossLinks,
+      restore,
       contentHash,
       alreadyPublished,
       drifted: alreadyPublished && ledgerHash.get(p.relPath) !== contentHash,
@@ -9651,7 +9722,7 @@ async function renderConfluencePayload(deps) {
   }
   const ordered = sortParentFirst([...envelopes.keys()], parents).map((s) => envelopes.get(s));
   const orphans = ledgerRows.filter((r) => !includedSources.has(r.source)).map((r) => ({ page: r.page, source: r.source })).sort((a, b) => a.source.localeCompare(b.source));
-  return { spaceId, pages: ordered, orphans };
+  return { spaceId, language, preserveTerms, pages: ordered, orphans };
 }
 
 // src/application/usecases/RecordPage.ts
@@ -10473,7 +10544,7 @@ async function applyMigration(store, ctx, opts) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.5.0";
+var PLUGIN_VERSION = "0.6.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -10735,7 +10806,7 @@ async function main() {
       fail("pull-stories", err);
     }
   });
-  cli.command("record-story", "write a READ-ONLY User Story snapshot into raw/_synced (body via stdin)").option("--page <id>", "upstream Confluence page id").option("--title <title>", "story title").option("--version <n>", "upstream page version").option("--parent <id>", "parent page id").option("--slug <slug>", "explicit kebab slug (for non-latin titles)").action(async (opts) => {
+  cli.command("record-story", "write a READ-ONLY User Story snapshot into raw/_synced (body via stdin)").option("--page <id>", "upstream Confluence page id").option("--title <title>", "story title").option("--page-version <n>", "upstream Confluence page version (cac reserves --version)").option("--parent <id>", "parent page id").option("--slug <slug>", "explicit kebab slug (for non-latin titles)").action(async (opts) => {
     try {
       if (!opts.page) throw new DomainError("missing --page", 1);
       if (!opts.title) throw new DomainError("missing --title", 1);
@@ -10746,7 +10817,7 @@ async function main() {
         {
           pageId: String(opts.page),
           title: String(opts.title),
-          version: opts.version != null ? Number(opts.version) : 0,
+          version: opts.pageVersion != null ? Number(opts.pageVersion) : 0,
           body,
           parentId: opts.parent != null ? String(opts.parent) : void 0,
           slug: opts.slug
@@ -10764,17 +10835,21 @@ async function main() {
       fail("record-story", err);
     }
   });
-  cli.command("prune-stories", "orphan-reconcile pulled snapshots against the live upstream page-id set").option("--live <ids>", "comma-separated upstream page-ids still present (empty = prune all)").action(async (opts) => {
+  cli.command("prune-stories", "orphan-reconcile pulled snapshots against the live upstream page-id set").option("--live <ids>", "comma-separated upstream page-ids still present (empty = prune all)").option("--commit", "delete the orphan snapshots + ledger rows (default: plan only \u2014 deletes nothing)").action(async (opts) => {
     try {
       if (opts.live == null) {
         throw new DomainError("prune-stories: missing --live (pass empty only to prune all)", 1);
       }
       const fs2 = new NodeFileSystem();
       const root = wikiRoot(opts);
-      const result = await pruneStorySnapshots(csv(opts.live), {
-        repo: new FoamWikiRepository(root, fs2),
-        ledger: new FileLedgerStore(root, fs2)
-      });
+      const result = await pruneStorySnapshots(
+        csv(opts.live),
+        {
+          repo: new FoamWikiRepository(root, fs2),
+          ledger: new FileLedgerStore(root, fs2)
+        },
+        { commit: !!opts.commit }
+      );
       emit({ ok: true, command: "prune-stories", data: result });
     } catch (err) {
       fail("prune-stories", err);
@@ -10819,6 +10894,36 @@ async function main() {
       emit({ ok: true, command: "record-page", data: result });
     } catch (err) {
       fail("record-page", err);
+    }
+  });
+  cli.command("finalize-confluence", "restore protected spans into a TRANSLATED Confluence page body (CAP-2 RU)").option("--source <path>", "wiki source path of the page (key into the render-confluence plan)").option("--plan <file>", "the saved `render-confluence --all` plan JSON (carries each page restore map)").action(async (opts) => {
+    try {
+      if (!opts.source) throw new DomainError("finalize-confluence: missing --source", 1);
+      if (!opts.plan) throw new DomainError("finalize-confluence: missing --plan", 1);
+      const fs2 = new NodeFileSystem();
+      const planArg = String(opts.plan);
+      const planText = await fs2.readFile(
+        path8.isAbsolute(planArg) ? planArg : path8.join(opts.cwd ?? process.cwd(), planArg)
+      );
+      let parsed;
+      try {
+        parsed = JSON.parse(planText);
+      } catch (e) {
+        throw new DomainError(`finalize-confluence: malformed plan JSON: ${e.message}`, 2);
+      }
+      const env = parsed;
+      const pages = env.data?.pages ?? env.pages;
+      if (!Array.isArray(pages)) throw new DomainError("finalize-confluence: plan has no data.pages[]", 2);
+      const page = pages.find((p) => p.source === String(opts.source));
+      if (!page) {
+        throw new DomainError(`finalize-confluence: no page with source "${opts.source}" in the plan`, 2);
+      }
+      const translated = await readStdin();
+      const { body, missing } = applyRestore(translated, page.restore ?? []);
+      emit({ ok: missing.length === 0, command: "finalize-confluence", data: { body, missing } });
+      if (missing.length > 0) process.exit(2);
+    } catch (err) {
+      fail("finalize-confluence", err);
     }
   });
   cli.command("guard-path", "PreToolUse hook: block writes to raw/ and .likec4 snapshots").option("--stdin", "read the hook payload from stdin").action(async () => {
@@ -10942,7 +11047,16 @@ async function main() {
       const source = opts.source != null ? String(opts.source) : "json";
       let model;
       if (source === "regex") {
-        const c4dir = path8.join(root, config.c4().dir);
+        let c4SourceDir;
+        try {
+          c4SourceDir = config.c4().dir;
+        } catch {
+          throw new DomainError(
+            'validate-c4 --source regex needs a [c4] config (e.g. {"c4":{"dir":"c4/src"}} in .arch-wiki/config.json); or use --stdin / --model-json (LikeC4 MCP / `likec4 export json`), which need no [c4] config',
+            2
+          );
+        }
+        const c4dir = path8.join(root, c4SourceDir);
         const files = await fs2.exists(c4dir) ? (await fs2.walk(c4dir)).filter((f) => f.endsWith(".c4")) : [];
         const text = (await Promise.all(files.map((f) => fs2.readFile(f)))).join("\n");
         model = parseC4Sources(text);
