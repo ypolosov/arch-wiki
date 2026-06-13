@@ -1,0 +1,6 @@
+- источник правда функциональных правил для проекта gt - https://veryuniquename.atlassian.net/wiki/spaces/PP/pages/16121885/User+Story+Log?atlOrigin=eyJpIjoiYjU1MjQ0NTQ4MTllNGZmZTk2NjZjOTNhNjBmZDhkZTIiLCJwIjoiYyJ9 . только чтение. ресурс переодически обновляет Product Owner.
+- docs/architecture в проекте gt это wiki knowlage base - источник правды. нужно по команде актуализировать (добавлять/уадлять/обновлять) в Confluence wiki knowlage base (на русском языке)
+    - изучи структуру и возможность Confluence чтобы реализовать wiki (кросс линки) через Confluence API
+    - у всех видов документов должны быть шаблоны
+- в целевом проекте нужно использовать foam mcp https://github.com/foambubble/foam для работы с knowlage base wiki
+- likec4 сущьности (должны отражать модель) и диаграмы (это проекции отражающие модель с разных перспектив, как описанно в Documanting Software Architecture) это проекции источника правды который находится в knowlage base (wiki + codebase) 
