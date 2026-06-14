@@ -88,11 +88,29 @@ const UpstreamSchema = z
 
 const IntegrationsSchema = z
   .object({
-    jira: z.object({ board: z.string(), projectKey: z.string() }).partial().strict().optional(),
+    jira: z
+      .object({
+        board: z.string(),
+        projectKey: z.string(),
+        // CAP-2 reverse trace edge (v0.8): Atlassian site base URL for absolute Jira
+        // browse links (<siteUrl>/browse/<KEY>) on the mirror page. Absent → Core falls
+        // back to confluence.siteUrl (same Atlassian site); absent both → no reverse link.
+        siteUrl: z.string().url(),
+      })
+      .partial()
+      .strict()
+      .optional(),
     confluence: z
       .object({
         space: z.string(),
         cloudId: z.string(),
+        // CAP-2 (v0.8): the NUMERIC Confluence space id (e.g. "163845"). createConfluencePage
+        // requires the numeric id, NOT the space KEY (passing the key → HTTP 400). `space`
+        // stays the KEY (used for the /wiki/spaces/<KEY>/pages/<id> cross-link URLs). Look it
+        // up once via getConfluenceSpaces(keys:[<KEY>]). Optional → publish preflight warns if missing.
+        // MUST be all-digits — accepting the KEY here would pass preflight and then fail mid-publish
+        // with the exact HTTP 400 the numeric id exists to prevent (R4, v0.8).
+        spaceId: z.string().regex(/^\d+$/, 'integrations.confluence.spaceId must be the NUMERIC space id, not the KEY'),
         // CAP-2 (v0.7): the Atlassian site base URL (e.g. https://acme.atlassian.net).
         // Used to build ABSOLUTE Confluence links inside Jira issues (issue→mirror trace,
         // render-issue) — Jira ADF wants an absolute href; cloudId is a UUID, not the host.

@@ -51,7 +51,12 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     const d = deps(root);
 
     const plan = await renderConfluencePayload(d);
-    expect(plan.spaceId).toBe('PP');
+    expect(plan.spaceKey).toBe('PP');
+    // v0.8: numeric spaceId + cloudId not configured here → null + preflight warnings.
+    expect(plan.spaceId).toBeNull();
+    expect(plan.cloudId).toBeNull();
+    expect(plan.warnings.some((w) => w.includes('spaceId'))).toBe(true);
+    expect(plan.warnings.some((w) => w.includes('cloudId'))).toBe(true);
     const sources = plan.pages.map((p) => p.source);
     // excluded: risks.md and the proposed ADR
     expect(sources).not.toContain('risks.md');
@@ -165,5 +170,123 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(qa1.contentHash).not.toBe(qa1en.contentHash);
     const plan2 = await renderConfluencePayload(dRu);
     expect(plan2.pages.find((p) => p.basename === 'QA-001-latency')!.contentHash).toBe(qa1.contentHash);
+  });
+
+  it('v0.8: carries numeric spaceId/cloudId, reverse-trace edge from realized_by, and stubs local images', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\nrealized_by: [GRMTCH-5]\n---\n# QA-001: Latency\n\n![C4 context](../c4/ctx.png)\n',
+    );
+    const cfg = ProjectConfig.from(
+      ProjectConfigSchema.parse({
+        integrations: {
+          confluence: { space: 'PP', spaceId: '163845', cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net' },
+        },
+      }),
+    );
+    const d = { ...deps(root), config: cfg };
+    await d.ledger.appendIssue({
+      key: 'GRMTCH-5', sourceId: 'QA-001', kind: 'arch', role: null, contentHash: 'h', createdAt: '2026-01-01T00:00:00Z', system: 'jira',
+    });
+
+    const plan = await renderConfluencePayload(d);
+    expect(plan.spaceKey).toBe('PP');
+    expect(plan.spaceId).toBe('163845');
+    expect(plan.cloudId).toBe('cloud-1');
+    expect(plan.warnings).toEqual([]); // fully configured → no preflight warnings
+
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.spaceKey).toBe('PP');
+    expect(qa1.realizedBy).toEqual([{ key: 'GRMTCH-5', url: 'https://acme.atlassian.net/browse/GRMTCH-5' }]);
+    // R7: the key is wrapped in inline code so the RU projection protects it byte-exact.
+    expect(qa1.body).toContain('**Realized by:** [`GRMTCH-5`](https://acme.atlassian.net/browse/GRMTCH-5)');
+    expect(qa1.body).toContain('C4 diagram placeholder — source `../c4/ctx.png`');
+    expect(qa1.body).not.toContain('![C4 context]');
+  });
+
+  it('v0.8: record-page --page-version is surfaced as ledgerPageVersion (drift-guard baseline)', async () => {
+    const root = await tmpRoot();
+    const d = deps(root);
+    const plan = await renderConfluencePayload(d);
+    const qa2 = plan.pages.find((p) => p.basename === 'QA-002-throughput')!;
+    await recordPage({ source: qa2.source, page: '999', hash: qa2.contentHash, pageVersion: 3 }, d);
+    const plan2 = await renderConfluencePayload(d);
+    expect(plan2.pages.find((p) => p.basename === 'QA-002-throughput')!.ledgerPageVersion).toBe(3);
+  });
+
+  it('v0.8 R6: distinguishes "no siteUrl" from "non-Jira issue" in the reverse-edge warning', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\nrealized_by: [GL-42]\n---\n# QA-001: Latency\n',
+    );
+
+    // (a) no siteUrl anywhere → "no jira.siteUrl/confluence.siteUrl" + key listed
+    const noUrl = await renderConfluencePayload(deps(root));
+    const qaNoUrl = noUrl.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qaNoUrl.realizedBy).toEqual([{ key: 'GL-42', url: null }]);
+    expect(qaNoUrl.warnings.some((w) => w.includes('no jira.siteUrl/confluence.siteUrl') && w.includes('GL-42'))).toBe(true);
+
+    // (b) siteUrl set, but GL-42 is a gitlab issue → "non-Jira issue(s)" (not the no-siteUrl message)
+    const cfg = ProjectConfig.from(
+      ProjectConfigSchema.parse({
+        integrations: { confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net' } },
+      }),
+    );
+    const d = { ...deps(root), config: cfg };
+    await d.ledger.appendIssue({
+      key: 'GL-42', sourceId: 'QA-001', kind: 'arch', role: null, contentHash: 'h', createdAt: '2026-01-01T00:00:00Z', system: 'gitlab',
+    });
+    const withUrl = await renderConfluencePayload(d);
+    const qaWithUrl = withUrl.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qaWithUrl.realizedBy).toEqual([{ key: 'GL-42', url: null }]); // gitlab → no browse URL yet
+    expect(qaWithUrl.warnings.some((w) => w.includes('non-Jira issue(s)') && w.includes('GL-42'))).toBe(true);
+    expect(qaWithUrl.warnings.some((w) => w.includes('no jira.siteUrl'))).toBe(false);
+  });
+
+  it('v0.8 R7+B-1: RU projection masks the reverse-edge key + a preserveTerm, restoring byte-exact', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\nrealized_by: [GRMTCH-5]\n---\n# QA-001: Latency\n\nThe wager flow is critical.\n',
+    );
+    const ruCfg = ProjectConfig.from(
+      ProjectConfigSchema.parse({
+        integrations: {
+          confluence: { space: 'PP', language: 'ru', preserveTerms: ['wager'], siteUrl: 'https://acme.atlassian.net' },
+        },
+      }),
+    );
+    const d = { ...deps(root), config: ruCfg };
+    await d.ledger.appendIssue({
+      key: 'GRMTCH-5', sourceId: 'QA-001', kind: 'arch', role: null, contentHash: 'h', createdAt: '2026-01-01T00:00:00Z', system: 'jira',
+    });
+
+    const plan = await renderConfluencePayload(d);
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    // masked body hides the Jira key (inline code) AND the preserveTerm from the translator
+    expect(qa1.body).not.toContain('GRMTCH-5');
+    expect(qa1.body).not.toContain('wager');
+    expect(qa1.body).toMatch(/%%AWP\d+%%/);
+    // restore is byte-exact: key (in inline code), browse URL and the preserveTerm all come back
+    const { body, missing } = applyRestore(qa1.body, qa1.restore);
+    expect(missing).toEqual([]);
+    expect(body).toContain('**Realized by:** [`GRMTCH-5`](https://acme.atlassian.net/browse/GRMTCH-5)');
+    expect(body).toContain('The wager flow is critical.');
+  });
+
+  it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(path.join(root, 'entities/cache.md'), '# Cache\n\nA plain entity.\n');
+    const plan = await renderConfluencePayload(deps(root));
+    const cache = plan.pages.find((p) => p.basename === 'cache')!;
+    expect(cache.body).toBe('# Cache\n\nA plain entity.\n'); // no reverse edge, no stub, exactly one trailing \n
+    expect(cache.realizedBy).toEqual([]);
+    expect(cache.restore).toEqual([]); // English mirror → nothing masked
   });
 });

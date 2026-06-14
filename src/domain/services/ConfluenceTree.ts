@@ -166,19 +166,61 @@ const KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
 // Non-image markdown link: not preceded by `!`.
 const MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
 
+// Code spans kept verbatim by the mirror: tilde fences (~~~…~~~), ``` fences, ``double`` and
+// `single` inline code. CommonMark uses multi-backtick spans to wrap content containing a literal
+// backtick; a naive /`[^`\n]+`/ mis-splits ``…`` and corrupts a code-protected link inside it
+// (review H1/M4). Backreference-free (each alternative is fixed-delimiter + lazy) to stay LINEAR —
+// a `(`+)[\s\S]*?\1` form backtracks quadratically on a long run of unclosed backticks (review 2a).
+const CODE_SPAN_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|``[\s\S]*?``|`[^`\n]*`/g;
+
+/** Apply `fn` only to the parts of `content` OUTSIDE the (global) `pattern`'s matches. Pure. */
+function transformOutsidePattern(content: string, pattern: RegExp, fn: (chunk: string) => string): string {
+  let out = '';
+  let last = 0;
+  for (const m of content.matchAll(pattern)) {
+    const start = m.index!;
+    out += fn(content.slice(last, start)) + m[0];
+    last = start + m[0].length;
+  }
+  return out + fn(content.slice(last));
+}
+
+/**
+ * Apply `fn` only to the parts of `content` OUTSIDE fenced/inline code spans, leaving code
+ * byte-exact. The link/image neutralisers run BEFORE the RU protect pass (which is also the only
+ * pass that masks code), so without this a code sample that legitimately contains `[x](y)` /
+ * `![x](y)` would be corrupted and would spuriously drift (R2, v0.8). Pure.
+ */
+export function transformOutsideCode(content: string, fn: (chunk: string) => string): string {
+  return transformOutsidePattern(content, CODE_SPAN_RE, fn);
+}
+
+/**
+ * A neutralised link's label that is a single token containing a dot (`CLAUDE.md`, `foo.example.com`)
+ * is auto-linked by Confluence's markdown converter into a dead `http://CLAUDE.md` link (gt feedback,
+ * item D). Wrap such a label in inline code to suppress the auto-link; in the RU projection that code
+ * span is then protected byte-exact. Other labels pass through unchanged. Pure.
+ */
+function protectAutolinkLabel(label: string): string {
+  return /^\S+$/.test(label) && label.includes('.') && !label.includes('`') ? `\`${label}\`` : label;
+}
+
 /**
  * Neutralise repo-relative markdown links (`[x](../iterations/)`, `[CLAUDE.md](../../CLAUDE.md)`)
  * to plain text — they are not wiki cross-links and render as dead relative hrefs in Confluence
- * (gt feedback). Keeps absolute links, resolved `/wiki/…` cross-links, pure `#anchor`s and image
- * embeds untouched. Pure; returns the body + the stripped URLs (sorted, for warnings).
+ * (gt feedback). Keeps absolute links, resolved `/wiki/…` cross-links, pure `#anchor`s, image
+ * embeds and code spans untouched. A filename/domain-like label is wrapped in inline code so
+ * Confluence does not auto-link it (item D). Pure; returns the body + the stripped URLs (sorted).
  */
 export function neutralizeRepoRelativeLinks(content: string): { body: string; stripped: string[] } {
   const stripped: string[] = [];
-  const body = content.replace(MD_LINK_RE, (m, label: string, url: string) => {
-    if (KEEP_LINK_URL.test(url)) return m;
-    stripped.push(url);
-    return label;
-  });
+  const body = transformOutsideCode(content, (chunk) =>
+    chunk.replace(MD_LINK_RE, (m, label: string, url: string) => {
+      if (KEEP_LINK_URL.test(url)) return m;
+      stripped.push(url);
+      return protectAutolinkLabel(label);
+    }),
+  );
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
 }
 
@@ -193,6 +235,41 @@ export function confluencePageUrl(
 ): string {
   const base = siteUrl ? siteUrl.replace(/\/+$/, '') : '';
   return `${base}/wiki/spaces/${spaceKey}/pages/${pageId}`;
+}
+
+/**
+ * Build a Jira issue browse URL `<siteUrl>/browse/<KEY>` for the reverse trace edge on a
+ * mirror page (NOT a Confluence /wiki URL — a distinct host path). Pure; `siteUrl` required.
+ */
+export function jiraBrowseUrl(siteUrl: string, key: string): string {
+  return `${siteUrl.replace(/\/+$/, '')}/browse/${key}`;
+}
+
+// Image embed whose src is a LOCAL/repo-relative path (not http/https): the Confluence
+// mirror can't reach it (no attachment-upload tool in the MCP), so it renders broken. The alt
+// group is non-greedy up to the literal `](` so alt text containing brackets (`![a [x] b](…)`)
+// is still captured and stubbed (review M3).
+const LOCAL_IMAGE_RE = /!\[([\s\S]*?)\]\((?!https?:)([^)\s]+)\)/g;
+
+/**
+ * Replace local image embeds (`![alt](../c4/context.png)`) with a deterministic stub so the
+ * mirror reflects WHERE a diagram belongs without a broken image — real C4/attachment
+ * embedding is deferred (the Atlassian MCP exposes no upload tool). The `src` is wrapped in
+ * inline code so the RU projection protects it byte-exact. Absolute (http/https) images and
+ * code spans are left untouched. The placeholder is INLINE-safe (no leading `> ` blockquote
+ * marker, which would land mid-line for an inline image and render a stray `>` — R5, v0.8).
+ * Pure; returns the body + the stubbed sources (sorted, for warnings).
+ */
+export function stubLocalImages(content: string): { body: string; stubbed: string[] } {
+  const stubbed: string[] = [];
+  const body = transformOutsideCode(content, (chunk) =>
+    chunk.replace(LOCAL_IMAGE_RE, (_m, alt: string, src: string) => {
+      stubbed.push(src);
+      const label = alt.trim() ? ` (${alt.trim()})` : '';
+      return `📐 C4 diagram placeholder — source \`${src}\`${label} _(attachment embedding pending)_`;
+    }),
+  );
+  return { body, stubbed: [...new Set(stubbed)].sort((a, b) => a.localeCompare(b)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,29 +295,65 @@ const PROTECT_SUFFIX = '%%';
 // Ordered structural maskers. Code FIRST (so backticks/links/ids inside code are not
 // re-masked), then markdown link URLs (the bare url inside `](…)`), then artifact-id
 // tokens (CONC before CON so the longer prefix wins). Each pass masks left-to-right.
+// The code pattern matches the same fenced/inline forms as CODE_SPAN_RE (tilde fences +
+// any backtick run), so the RU mask protects ``double``-backtick and ~~~ code too (H1/M4).
 const STRUCTURAL_PATTERNS: readonly RegExp[] = [
-  /```[\s\S]*?```/g, // fenced code blocks
-  /`[^`\n]+`/g, // inline code
+  /~~~[\s\S]*?~~~|```[\s\S]*?```|``[\s\S]*?``|`[^`\n]*`/g, // fenced + inline code (linear, see CODE_SPAN_RE)
   /(?<=\]\()[^)\s]+(?=\))/g, // markdown/image link URL
   /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g, // artifact-id tokens
 ];
 
+/** Escape regex metacharacters so a denylist term is matched literally. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
- * Replace structural spans (code, link URLs, artifact ids) with opaque `%%AWP<n>%%`
- * placeholders so an LLM translation pass cannot alter them. Deterministic: the same
- * English body always yields the same masked text + ordered restore map. Pure.
+ * Replace structural spans (code, link URLs, artifact ids) AND deny-listed terms with opaque
+ * `%%AWP<n>%%` placeholders so an LLM translation pass cannot alter them. Deterministic: the same
+ * English body + same `preserveTerms` always yields the same masked text + ordered restore map.
+ *
+ * `preserveTerms` (B-1, v0.8): config `confluence.preserveTerms` merged with glossary bold terms.
+ * Masking them in Core (rather than only listing them in the translator prompt) makes "keep these
+ * verbatim" DETERMINISTIC instead of LLM discretion. Matched literally (metachars escaped), with a
+ * word boundary (`[\w-]`) on each side so a term is not matched inside a longer word, case-sensitive,
+ * longest-first so a shorter term that is a prefix of another does not shadow it. Applied AFTER the
+ * structural patterns — a term already inside masked code/url is gone from `masked`, so it is not
+ * double-masked. Pure.
  */
-export function protectStructuralSpans(body: string): { masked: string; restore: ProtectedSpan[] } {
+export function protectStructuralSpans(
+  body: string,
+  preserveTerms: readonly string[] = [],
+): { masked: string; restore: ProtectedSpan[] } {
+  // Collision-free placeholder prefix: if the source literally contains our default prefix (e.g. a
+  // page documenting the masking format, or a preserveTerm of shape `AWP<n>`), lengthen it until
+  // absent — a generated token can then never coincide with source text, so restore stays a
+  // byte-exact round-trip (review L1). Deterministic: the same body always picks the same prefix.
+  let prefix = PROTECT_PREFIX;
+  while (body.includes(prefix)) prefix += 'X';
+  const tokenRe = new RegExp(`${escapeRegExp(prefix)}\\d+${escapeRegExp(PROTECT_SUFFIX)}`, 'g');
+
   const restore: ProtectedSpan[] = [];
   let masked = body;
   let n = 0;
-  for (const re of STRUCTURAL_PATTERNS) {
-    masked = masked.replace(re, (m) => {
-      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
-      n += 1;
-      restore.push({ token, original: m });
-      return token;
-    });
+  const emit = (m: string): string => {
+    const token = `${prefix}${n}${PROTECT_SUFFIX}`;
+    n += 1;
+    restore.push({ token, original: m });
+    return token;
+  };
+  // Structural patterns run over the whole string (their patterns never match an emitted token).
+  for (const re of STRUCTURAL_PATTERNS) masked = masked.replace(re, emit);
+  // Term patterns run ONLY outside already-emitted placeholders, so a term that happens to match a
+  // token's interior (e.g. `AWP0`) cannot corrupt it (review M1). The boundary class excludes `_`
+  // so an underscore-emphasised / snake_case-adjacent term is still masked (review M2), but keeps
+  // `-` so a hyphenated compound is treated as one word.
+  const terms = [...new Set(preserveTerms)]
+    .filter((t) => t.trim().length > 0)
+    .sort((a, b) => b.length - a.length || a.localeCompare(b));
+  for (const term of terms) {
+    const termRe = new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(term)}(?![A-Za-z0-9-])`, 'g');
+    masked = transformOutsidePattern(masked, tokenRe, (chunk) => chunk.replace(termRe, emit));
   }
   return { masked, restore };
 }

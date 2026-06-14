@@ -100,6 +100,21 @@ function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+/**
+ * Parse a CLI flag that must be a positive decimal integer. Fail-fast (exit 1, §2.4) on anything
+ * else — used for `--page-version`, a Confluence page version (always ≥ 1). Strict all-digits match
+ * (not `Number()`, which would silently accept `0x10`/`1e3`/`0o17` and corrupt the drift baseline,
+ * review M5) + a safe-integer ceiling so the value round-trips the user's string (review L4).
+ */
+function positiveIntFlag(name: string, value: unknown): number {
+  const s = String(value).trim();
+  const n = Number(s);
+  if (!/^\d+$/.test(s) || !Number.isSafeInteger(n) || n < 1) {
+    throw new DomainError(`${name} must be a positive integer, got "${String(value)}"`, 1);
+  }
+  return n;
+}
+
 /** Read the `data.pages[]` array from a saved `render-confluence` plan file (exit 2 on malformed). */
 async function readPlanPages(
   fs: NodeFileSystem,
@@ -487,7 +502,7 @@ async function main(): Promise<void> {
           {
             pageId: String(opts.page),
             title: String(opts.title),
-            version: opts.pageVersion != null ? Number(opts.pageVersion) : 0,
+            version: opts.pageVersion != null ? positiveIntFlag('--page-version', opts.pageVersion) : 0,
             body,
             parentId: opts.parent != null ? String(opts.parent) : undefined,
             slug: opts.slug as string | undefined,
@@ -545,9 +560,31 @@ async function main(): Promise<void> {
           config: await loadProjectConfig(opts),
           hash: sha256,
         });
-        const data = opts.page
-          ? { ...plan, pages: plan.pages.filter((p) => p.source === String(opts.page)) }
-          : plan;
+        let data = plan;
+        if (opts.page) {
+          const bySource = new Map(plan.pages.map((p) => [p.source, p]));
+          const target = bySource.get(String(opts.page));
+          if (!target) {
+            // fail-fast §2.4 (consistent with record-page / finalize-confluence): a typo or an
+            // excluded page must not look like a successful empty publish.
+            throw new DomainError(
+              `render-confluence --page: no mirror page with source "${opts.page}" — check the path, ` +
+                'or it may be excluded by the visibility filter (confluence:false / audience:internal / ' +
+                'proposed|rejected ADR / register page)',
+              2,
+            );
+          }
+          // C-2: emit the target PLUS its full ancestor chain so the orchestrator creates parents
+          // before the target — a partial publish keeps the mirror hierarchy instead of going flat.
+          const chain = new Set<string>();
+          let cur: string | null = target.source;
+          while (cur != null && !chain.has(cur)) {
+            chain.add(cur);
+            cur = bySource.get(cur)?.parentSource ?? null;
+          }
+          // plan.pages is already parent-first (sortParentFirst) — preserve that order.
+          data = { ...plan, pages: plan.pages.filter((p) => chain.has(p.source)) };
+        }
         emit({ ok: true, command: 'render-confluence', data });
       } catch (err) {
         fail('render-confluence', err);
@@ -559,6 +596,7 @@ async function main(): Promise<void> {
     .option('--source <path>', 'wiki-relative source path (the ledger key)')
     .option('--page <id>', 'external Confluence page id')
     .option('--hash <hash>', 'content hash from render-confluence')
+    .option('--page-version <n>', 'Confluence page version returned by create/update (destination-drift baseline)')
     .option('--from-plan <file>', 'read --hash (+ --page if absent) for --source from a saved render-confluence plan (avoids a stale hand-copied hash; pass-2 resolves cross-links → the hash changes)')
     .option('--system <system>', 'external system (default confluence)')
     .option('--delete', 'reconcile a deleted orphan: drop the ledger row + published_as')
@@ -583,6 +621,7 @@ async function main(): Promise<void> {
             source: String(opts.source),
             page,
             hash,
+            pageVersion: opts.pageVersion != null ? positiveIntFlag('--page-version', opts.pageVersion) : undefined,
             system: opts.system != null ? String(opts.system) : undefined,
             del: !!opts['delete'],
           },

@@ -8660,10 +8660,24 @@ var UpstreamSchema = external_exports.object({
   }).strict().optional()
 }).strict().optional();
 var IntegrationsSchema = external_exports.object({
-  jira: external_exports.object({ board: external_exports.string(), projectKey: external_exports.string() }).partial().strict().optional(),
+  jira: external_exports.object({
+    board: external_exports.string(),
+    projectKey: external_exports.string(),
+    // CAP-2 reverse trace edge (v0.8): Atlassian site base URL for absolute Jira
+    // browse links (<siteUrl>/browse/<KEY>) on the mirror page. Absent → Core falls
+    // back to confluence.siteUrl (same Atlassian site); absent both → no reverse link.
+    siteUrl: external_exports.string().url()
+  }).partial().strict().optional(),
   confluence: external_exports.object({
     space: external_exports.string(),
     cloudId: external_exports.string(),
+    // CAP-2 (v0.8): the NUMERIC Confluence space id (e.g. "163845"). createConfluencePage
+    // requires the numeric id, NOT the space KEY (passing the key → HTTP 400). `space`
+    // stays the KEY (used for the /wiki/spaces/<KEY>/pages/<id> cross-link URLs). Look it
+    // up once via getConfluenceSpaces(keys:[<KEY>]). Optional → publish preflight warns if missing.
+    // MUST be all-digits — accepting the KEY here would pass preflight and then fail mid-publish
+    // with the exact HTTP 400 the numeric id exists to prevent (R4, v0.8).
+    spaceId: external_exports.string().regex(/^\d+$/, "integrations.confluence.spaceId must be the NUMERIC space id, not the KEY"),
     // CAP-2 (v0.7): the Atlassian site base URL (e.g. https://acme.atlassian.net).
     // Used to build ABSOLUTE Confluence links inside Jira issues (issue→mirror trace,
     // render-issue) — Jira ADF wants an absolute href; cloudId is a UUID, not the host.
@@ -8759,10 +8773,15 @@ var FileLedgerStore = class {
   }
   async appendIssue(row) {
     const rows = await this.readIssues();
-    if (rows.some((r) => r.key === row.key && r.sourceId === row.sourceId && r.kind === row.kind && r.role === row.role)) {
-      return false;
+    const idx = rows.findIndex(
+      (r) => r.key === row.key && r.sourceId === row.sourceId && r.kind === row.kind && r.role === row.role
+    );
+    if (idx >= 0) {
+      if (rows[idx].contentHash === row.contentHash) return false;
+      rows[idx] = row;
+    } else {
+      rows.push(row);
     }
-    rows.push(row);
     rows.sort((a, b) => a.key.localeCompare(b.key));
     await this.writeArray(ISSUES_FILE, "issues", rows);
     return true;
@@ -8774,8 +8793,12 @@ var FileLedgerStore = class {
     const rows = await this.readPages();
     const idx = rows.findIndex((r) => r.page === row.page && r.source === row.source);
     if (idx >= 0) {
-      if (rows[idx].contentHash === row.contentHash) return false;
-      rows[idx] = row;
+      const existing = rows[idx];
+      const merged = row.pageVersion == null && existing.pageVersion != null ? { ...row, pageVersion: existing.pageVersion } : row;
+      if (existing.contentHash === merged.contentHash && existing.pageVersion === merged.pageVersion) {
+        return false;
+      }
+      rows[idx] = merged;
     } else {
       rows.push(row);
     }
@@ -8922,6 +8945,22 @@ var ProjectConfig = class _ProjectConfig {
    */
   confluenceSiteUrl() {
     const u = this.cfg.integrations?.confluence?.siteUrl;
+    return u ? u.replace(/\/+$/, "") : null;
+  }
+  /** OPTIONAL. The NUMERIC Confluence space id (createConfluencePage needs it, not the KEY); null if unset. */
+  confluenceSpaceId() {
+    return this.cfg.integrations?.confluence?.spaceId ?? null;
+  }
+  /** OPTIONAL. The Confluence cloudId (create/update require it); null if unset. */
+  confluenceCloudId() {
+    return this.cfg.integrations?.confluence?.cloudId ?? null;
+  }
+  /**
+   * OPTIONAL. Atlassian site base URL for Jira browse links (reverse trace edge). Prefers
+   * integrations.jira.siteUrl, falls back to confluence.siteUrl (same Atlassian site); null if neither.
+   */
+  jiraSiteUrl() {
+    const u = this.cfg.integrations?.jira?.siteUrl ?? this.cfg.integrations?.confluence?.siteUrl;
     return u ? u.replace(/\/+$/, "") : null;
   }
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
@@ -9369,42 +9408,86 @@ function splitTitle(title) {
 }
 var KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
 var MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
+var CODE_SPAN_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|``[\s\S]*?``|`[^`\n]*`/g;
+function transformOutsidePattern(content, pattern, fn) {
+  let out = "";
+  let last = 0;
+  for (const m of content.matchAll(pattern)) {
+    const start = m.index;
+    out += fn(content.slice(last, start)) + m[0];
+    last = start + m[0].length;
+  }
+  return out + fn(content.slice(last));
+}
+function transformOutsideCode(content, fn) {
+  return transformOutsidePattern(content, CODE_SPAN_RE, fn);
+}
+function protectAutolinkLabel(label) {
+  return /^\S+$/.test(label) && label.includes(".") && !label.includes("`") ? `\`${label}\`` : label;
+}
 function neutralizeRepoRelativeLinks(content) {
   const stripped = [];
-  const body = content.replace(MD_LINK_RE, (m, label, url) => {
-    if (KEEP_LINK_URL.test(url)) return m;
-    stripped.push(url);
-    return label;
-  });
+  const body = transformOutsideCode(
+    content,
+    (chunk) => chunk.replace(MD_LINK_RE, (m, label, url) => {
+      if (KEEP_LINK_URL.test(url)) return m;
+      stripped.push(url);
+      return protectAutolinkLabel(label);
+    })
+  );
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
 }
 function confluencePageUrl(siteUrl, spaceKey, pageId) {
   const base = siteUrl ? siteUrl.replace(/\/+$/, "") : "";
   return `${base}/wiki/spaces/${spaceKey}/pages/${pageId}`;
 }
+function jiraBrowseUrl(siteUrl, key) {
+  return `${siteUrl.replace(/\/+$/, "")}/browse/${key}`;
+}
+var LOCAL_IMAGE_RE = /!\[([\s\S]*?)\]\((?!https?:)([^)\s]+)\)/g;
+function stubLocalImages(content) {
+  const stubbed = [];
+  const body = transformOutsideCode(
+    content,
+    (chunk) => chunk.replace(LOCAL_IMAGE_RE, (_m, alt, src) => {
+      stubbed.push(src);
+      const label = alt.trim() ? ` (${alt.trim()})` : "";
+      return `\u{1F4D0} C4 diagram placeholder \u2014 source \`${src}\`${label} _(attachment embedding pending)_`;
+    })
+  );
+  return { body, stubbed: [...new Set(stubbed)].sort((a, b) => a.localeCompare(b)) };
+}
 var PROTECT_PREFIX = "%%AWP";
 var PROTECT_SUFFIX = "%%";
 var STRUCTURAL_PATTERNS = [
-  /```[\s\S]*?```/g,
-  // fenced code blocks
-  /`[^`\n]+`/g,
-  // inline code
+  /~~~[\s\S]*?~~~|```[\s\S]*?```|``[\s\S]*?``|`[^`\n]*`/g,
+  // fenced + inline code (linear, see CODE_SPAN_RE)
   /(?<=\]\()[^)\s]+(?=\))/g,
   // markdown/image link URL
   /\b(?:UC|QA|CONC|CON|ADR|ITER)-\d{2,4}\b/g
   // artifact-id tokens
 ];
-function protectStructuralSpans(body) {
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function protectStructuralSpans(body, preserveTerms = []) {
+  let prefix = PROTECT_PREFIX;
+  while (body.includes(prefix)) prefix += "X";
+  const tokenRe = new RegExp(`${escapeRegExp(prefix)}\\d+${escapeRegExp(PROTECT_SUFFIX)}`, "g");
   const restore = [];
   let masked = body;
   let n = 0;
-  for (const re of STRUCTURAL_PATTERNS) {
-    masked = masked.replace(re, (m) => {
-      const token = `${PROTECT_PREFIX}${n}${PROTECT_SUFFIX}`;
-      n += 1;
-      restore.push({ token, original: m });
-      return token;
-    });
+  const emit2 = (m) => {
+    const token = `${prefix}${n}${PROTECT_SUFFIX}`;
+    n += 1;
+    restore.push({ token, original: m });
+    return token;
+  };
+  for (const re of STRUCTURAL_PATTERNS) masked = masked.replace(re, emit2);
+  const terms = [...new Set(preserveTerms)].filter((t) => t.trim().length > 0).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  for (const term of terms) {
+    const termRe = new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(term)}(?![A-Za-z0-9-])`, "g");
+    masked = transformOutsidePattern(masked, tokenRe, (chunk) => chunk.replace(termRe, emit2));
   }
   return { masked, restore };
 }
@@ -9731,14 +9814,26 @@ function titleOf(page) {
 }
 async function renderConfluencePayload(deps) {
   const conf = deps.config.confluence();
-  const spaceId = conf?.space;
-  if (!spaceId) {
+  const spaceKey = conf?.space;
+  if (!spaceKey) {
     throw new DomainError(
       "project has no [integrations.confluence.space]; required by render-confluence",
       2
     );
   }
   const language = conf?.language ?? null;
+  const spaceIdNumeric = deps.config.confluenceSpaceId();
+  const cloudId = deps.config.confluenceCloudId();
+  const jiraSiteUrl = deps.config.jiraSiteUrl();
+  const planWarnings = [];
+  if (!spaceIdNumeric) {
+    planWarnings.push(
+      `integrations.confluence.spaceId (numeric) is not set \u2014 createConfluencePage needs it (the space KEY "${spaceKey}" returns HTTP 400); look it up once via getConfluenceSpaces(keys:["${spaceKey}"])`
+    );
+  }
+  if (!cloudId) {
+    planWarnings.push("integrations.confluence.cloudId is not set \u2014 create/updateConfluencePage require it");
+  }
   const rawExclude = conf.exclude;
   const exclude = {
     statuses: rawExclude?.statuses ?? DEFAULT_EXCLUDE.statuses,
@@ -9768,10 +9863,14 @@ async function renderConfluencePayload(deps) {
   const ledgerRows = await deps.ledger.readPages();
   const publishedMap = /* @__PURE__ */ new Map();
   const ledgerHash = /* @__PURE__ */ new Map();
+  const ledgerVersion = /* @__PURE__ */ new Map();
   for (const r of ledgerRows) {
     publishedMap.set(r.source, r.page);
     ledgerHash.set(r.source, r.contentHash);
+    if (r.pageVersion != null) ledgerVersion.set(r.source, r.pageVersion);
   }
+  const issueSystem = /* @__PURE__ */ new Map();
+  for (const r of await deps.ledger.readIssues()) issueSystem.set(r.key, r.system);
   const envelopes = /* @__PURE__ */ new Map();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
@@ -9780,13 +9879,26 @@ async function renderConfluencePayload(deps) {
       graph,
       publishedMap,
       includedSources,
-      spaceId,
-      // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
+      spaceKey,
+      // the space KEY → /wiki/spaces/<key>/pages/<id> (NOT the numeric create id)
       // Translation mode reserves a masked-link slot for not-yet-published targets so the
       // translatable body is stable across the 2-pass publish (no re-translation on pass 2).
       language != null
     );
-    const { body: englishBody, stripped } = neutralizeRepoRelativeLinks(resolved);
+    const { body: neutralized, stripped } = neutralizeRepoRelativeLinks(resolved);
+    const { body: stubbedBody, stubbed } = stubLocalImages(neutralized);
+    const realizedKeys = Array.isArray(parsed.frontmatter.realized_by) ? parsed.frontmatter.realized_by.map(String) : [];
+    const realizedBy = realizedKeys.map((key) => {
+      const sys = issueSystem.get(key);
+      const url = jiraSiteUrl && (sys === void 0 || sys === "jira") ? jiraBrowseUrl(jiraSiteUrl, key) : null;
+      return { key, url };
+    });
+    const linked = realizedBy.filter((r) => r.url);
+    const reverseEdge = linked.length ? `
+
+**Realized by:** ${linked.map((r) => `[\`${r.key}\`](${r.url})`).join(", ")}
+` : "";
+    const englishBody = `${stubbedBody.replace(/\n+$/, "")}${reverseEdge ? reverseEdge : "\n"}`;
     const title = titleOf(p);
     const { prefix: titlePrefix, label: titleLabel } = splitTitle(title);
     const parentSource = parents.get(p.relPath) ?? null;
@@ -9795,7 +9907,7 @@ async function renderConfluencePayload(deps) {
         language ? { title, parentSource, body: englishBody, language } : { title, parentSource, body: englishBody }
       )
     );
-    const { masked, restore } = language ? protectStructuralSpans(englishBody) : { masked: englishBody, restore: [] };
+    const { masked, restore } = language ? protectStructuralSpans(englishBody, preserveTerms) : { masked: englishBody, restore: [] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings = [];
     if (crossLinks.some((c) => !c.resolved)) {
@@ -9806,13 +9918,22 @@ async function renderConfluencePayload(deps) {
     if (stripped.length > 0) {
       warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(", ")}`);
     }
+    if (stubbed.length > 0) {
+      warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(", ")}`);
+    }
+    const unlinked = realizedBy.filter((r) => !r.url);
+    if (unlinked.length > 0) {
+      warnings.push(
+        jiraSiteUrl ? `realized_by non-Jira issue(s) \u2014 no browse link yet: ${unlinked.map((r) => r.key).join(", ")}` : `realized_by issue(s) present but no jira.siteUrl/confluence.siteUrl \u2014 reverse trace link omitted: ${unlinked.map((r) => r.key).join(", ")}`
+      );
+    }
     envelopes.set(p.relPath, {
       source: p.relPath,
       basename: p.basename,
       title,
       titlePrefix,
       titleLabel,
-      spaceId,
+      spaceKey,
       parentSource,
       language,
       body: masked,
@@ -9822,12 +9943,23 @@ async function renderConfluencePayload(deps) {
       alreadyPublished,
       drifted: alreadyPublished && ledgerHash.get(p.relPath) !== contentHash,
       pageId: publishedMap.get(p.relPath) ?? null,
+      ledgerPageVersion: ledgerVersion.get(p.relPath) ?? null,
+      realizedBy,
       warnings
     });
   }
   const ordered = sortParentFirst([...envelopes.keys()], parents).map((s) => envelopes.get(s));
   const orphans = ledgerRows.filter((r) => !includedSources.has(r.source)).map((r) => ({ page: r.page, source: r.source })).sort((a, b) => a.source.localeCompare(b.source));
-  return { spaceId, language, preserveTerms, pages: ordered, orphans };
+  return {
+    spaceKey,
+    spaceId: spaceIdNumeric,
+    cloudId,
+    language,
+    preserveTerms,
+    pages: ordered,
+    orphans,
+    warnings: planWarnings
+  };
 }
 
 // src/application/usecases/RecordPage.ts
@@ -9858,7 +9990,8 @@ async function recordPage(input, deps) {
     page,
     contentHash: input.hash,
     publishedAt: clock.now().toISOString(),
-    system
+    system,
+    ...input.pageVersion != null ? { pageVersion: input.pageVersion } : {}
   });
   let frontmatterUpdated = false;
   if (await repo.exists(source)) {
@@ -10664,7 +10797,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.7.1";
+var PLUGIN_VERSION = "0.8.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -10707,6 +10840,14 @@ function csv(value) {
 }
 function sha256(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
+}
+function positiveIntFlag(name, value) {
+  const s = String(value).trim();
+  const n = Number(s);
+  if (!/^\d+$/.test(s) || !Number.isSafeInteger(n) || n < 1) {
+    throw new DomainError(`${name} must be a positive integer, got "${String(value)}"`, 1);
+  }
+  return n;
 }
 async function readPlanPages(fs2, planArg, cwd) {
   const planText = await fs2.readFile(path8.isAbsolute(planArg) ? planArg : path8.join(cwd, planArg));
@@ -10978,7 +11119,7 @@ async function main() {
         {
           pageId: String(opts.page),
           title: String(opts.title),
-          version: opts.pageVersion != null ? Number(opts.pageVersion) : 0,
+          version: opts.pageVersion != null ? positiveIntFlag("--page-version", opts.pageVersion) : 0,
           body,
           parentId: opts.parent != null ? String(opts.parent) : void 0,
           slug: opts.slug
@@ -11026,13 +11167,30 @@ async function main() {
         config: await loadProjectConfig(opts),
         hash: sha256
       });
-      const data = opts.page ? { ...plan, pages: plan.pages.filter((p) => p.source === String(opts.page)) } : plan;
+      let data = plan;
+      if (opts.page) {
+        const bySource = new Map(plan.pages.map((p) => [p.source, p]));
+        const target = bySource.get(String(opts.page));
+        if (!target) {
+          throw new DomainError(
+            `render-confluence --page: no mirror page with source "${opts.page}" \u2014 check the path, or it may be excluded by the visibility filter (confluence:false / audience:internal / proposed|rejected ADR / register page)`,
+            2
+          );
+        }
+        const chain = /* @__PURE__ */ new Set();
+        let cur = target.source;
+        while (cur != null && !chain.has(cur)) {
+          chain.add(cur);
+          cur = bySource.get(cur)?.parentSource ?? null;
+        }
+        data = { ...plan, pages: plan.pages.filter((p) => chain.has(p.source)) };
+      }
       emit({ ok: true, command: "render-confluence", data });
     } catch (err) {
       fail("render-confluence", err);
     }
   });
-  cli.command("record-page", "record a published Confluence page in the ledger + published_as frontmatter").option("--source <path>", "wiki-relative source path (the ledger key)").option("--page <id>", "external Confluence page id").option("--hash <hash>", "content hash from render-confluence").option("--from-plan <file>", "read --hash (+ --page if absent) for --source from a saved render-confluence plan (avoids a stale hand-copied hash; pass-2 resolves cross-links \u2192 the hash changes)").option("--system <system>", "external system (default confluence)").option("--delete", "reconcile a deleted orphan: drop the ledger row + published_as").action(async (opts) => {
+  cli.command("record-page", "record a published Confluence page in the ledger + published_as frontmatter").option("--source <path>", "wiki-relative source path (the ledger key)").option("--page <id>", "external Confluence page id").option("--hash <hash>", "content hash from render-confluence").option("--page-version <n>", "Confluence page version returned by create/update (destination-drift baseline)").option("--from-plan <file>", "read --hash (+ --page if absent) for --source from a saved render-confluence plan (avoids a stale hand-copied hash; pass-2 resolves cross-links \u2192 the hash changes)").option("--system <system>", "external system (default confluence)").option("--delete", "reconcile a deleted orphan: drop the ledger row + published_as").action(async (opts) => {
     try {
       if (!opts.source) throw new DomainError("missing --source", 1);
       const fs2 = new NodeFileSystem();
@@ -11053,6 +11211,7 @@ async function main() {
           source: String(opts.source),
           page,
           hash,
+          pageVersion: opts.pageVersion != null ? positiveIntFlag("--page-version", opts.pageVersion) : void 0,
           system: opts.system != null ? String(opts.system) : void 0,
           del: !!opts["delete"]
         },

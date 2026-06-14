@@ -10,12 +10,14 @@ import {
   ProtectedSpan,
   extractGlossaryTerms,
   isPageExcluded,
+  jiraBrowseUrl,
   neutralizeRepoRelativeLinks,
   parentSourceOf,
   protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
   splitTitle,
+  stubLocalImages,
 } from '../../domain/services/ConfluenceTree';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
@@ -29,7 +31,8 @@ export interface PageEnvelope {
   titlePrefix: string;
   /** Translatable part of `title` (e.g. `Login`); publish translates only this, then recombines with `titlePrefix`. */
   titleLabel: string;
-  spaceId: string;
+  /** Confluence space KEY (for the /wiki/spaces/<KEY>/pages/<id> cross-link URLs) — NOT the numeric create id. */
+  spaceKey: string;
   /** Parent page's source relPath, or null for the root. */
   parentSource: string | null;
   language: string | null;
@@ -49,11 +52,31 @@ export interface PageEnvelope {
   /** alreadyPublished && the ledgered hash differs (content changed → re-publish). */
   drifted: boolean;
   pageId: string | null;
+  /**
+   * Confluence page version recorded at the last publish (destination-drift baseline, v0.8);
+   * null if never published / pre-0.8 ledger. The orchestrator compares the LIVE version
+   * against this before update and refuses to clobber a higher (hand-edited) live version.
+   */
+  ledgerPageVersion: number | null;
+  /** Reverse trace edge (v0.8): Jira issues that realize this artifact (from `realized_by` frontmatter). */
+  realizedBy: IssueRef[];
   warnings: string[];
 }
 
+/** A realizing issue link for the reverse trace edge on a mirror page. */
+export interface IssueRef {
+  key: string;
+  /** Absolute Jira browse URL, or null if no jira/confluence siteUrl is configured. */
+  url: string | null;
+}
+
 export interface MirrorPlan {
-  spaceId: string;
+  /** Confluence space KEY (cross-link URLs + display). */
+  spaceKey: string;
+  /** NUMERIC Confluence space id for createConfluencePage; null if unset → preflight warns. */
+  spaceId: string | null;
+  /** Confluence cloudId (create/update require it); null if unset → preflight warns. */
+  cloudId: string | null;
   /** Mirror presentation language (`confluence.language`), or null = publish English as-is. */
   language: string | null;
   /** Translation denylist (config preserveTerms + glossary bold terms); empty when not translating. */
@@ -61,6 +84,8 @@ export interface MirrorPlan {
   pages: PageEnvelope[];
   /** Published-pages ledger rows whose source no longer maps to a live included page. */
   orphans: { page: string; source: string }[];
+  /** Plan-level preflight warnings (e.g. publishable-but-incomplete confluence config). */
+  warnings: string[];
 }
 
 export interface RenderConfluenceDeps {
@@ -89,14 +114,30 @@ function titleOf(page: WikiPage): string {
  */
 export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promise<MirrorPlan> {
   const conf = deps.config.confluence();
-  const spaceId = conf?.space;
-  if (!spaceId) {
+  const spaceKey = conf?.space;
+  if (!spaceKey) {
     throw new DomainError(
       'project has no [integrations.confluence.space]; required by render-confluence',
       2,
     );
   }
   const language = conf?.language ?? null;
+  const spaceIdNumeric = deps.config.confluenceSpaceId();
+  const cloudId = deps.config.confluenceCloudId();
+  const jiraSiteUrl = deps.config.jiraSiteUrl();
+
+  // Preflight (v0.8): the confluence block is independently-optional, but a working publish
+  // needs the KEY + numeric spaceId + cloudId. Surface what is missing ONCE, up front, instead
+  // of failing mid-publish as an opaque MCP error.
+  const planWarnings: string[] = [];
+  if (!spaceIdNumeric) {
+    planWarnings.push(
+      `integrations.confluence.spaceId (numeric) is not set — createConfluencePage needs it (the space KEY "${spaceKey}" returns HTTP 400); look it up once via getConfluenceSpaces(keys:["${spaceKey}"])`,
+    );
+  }
+  if (!cloudId) {
+    planWarnings.push('integrations.confluence.cloudId is not set — create/updateConfluencePage require it');
+  }
 
   const rawExclude = (conf as { exclude?: Partial<MirrorExclude> }).exclude;
   const exclude: MirrorExclude = {
@@ -136,10 +177,16 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const ledgerRows = await deps.ledger.readPages();
   const publishedMap = new Map<string, string>(); // source → page id
   const ledgerHash = new Map<string, string>();
+  const ledgerVersion = new Map<string, number>(); // source → recorded Confluence page version
   for (const r of ledgerRows) {
     publishedMap.set(r.source, r.page);
     ledgerHash.set(r.source, r.contentHash);
+    if (r.pageVersion != null) ledgerVersion.set(r.source, r.pageVersion);
   }
+  // Reverse trace edge (v0.8): map each issue key → its system, so a key from `realized_by`
+  // gets a Jira browse URL only when it is actually a Jira issue (gitlab/other → no URL yet).
+  const issueSystem = new Map<string, string>();
+  for (const r of await deps.ledger.readIssues()) issueSystem.set(r.key, r.system);
 
   const envelopes = new Map<string, PageEnvelope>();
   for (const p of included) {
@@ -149,13 +196,35 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       graph,
       publishedMap,
       includedSources,
-      spaceId, // confluence().space is the space KEY → /wiki/spaces/<key>/pages/<id>
+      spaceKey, // the space KEY → /wiki/spaces/<key>/pages/<id> (NOT the numeric create id)
       // Translation mode reserves a masked-link slot for not-yet-published targets so the
       // translatable body is stable across the 2-pass publish (no re-translation on pass 2).
       language != null,
     );
     // Repo-relative md links (../iterations/, CLAUDE.md …) are dead hrefs in Confluence → plain text.
-    const { body: englishBody, stripped } = neutralizeRepoRelativeLinks(resolved);
+    const { body: neutralized, stripped } = neutralizeRepoRelativeLinks(resolved);
+    // Local image embeds (C4 diagrams) → deterministic placeholder (MCP has no attachment upload).
+    const { body: stubbedBody, stubbed } = stubLocalImages(neutralized);
+
+    // Reverse trace edge: the Jira issues that realize this artifact (`realized_by` frontmatter,
+    // written by record-issue). Append a Core-rendered line so the mirror page links back to its
+    // issue — part of the body so it drifts/re-publishes when the realizing issue changes.
+    const realizedKeys = Array.isArray((parsed.frontmatter as { realized_by?: unknown }).realized_by)
+      ? (parsed.frontmatter as { realized_by: unknown[] }).realized_by.map(String)
+      : [];
+    const realizedBy: IssueRef[] = realizedKeys.map((key) => {
+      const sys = issueSystem.get(key);
+      const url = jiraSiteUrl && (sys === undefined || sys === 'jira') ? jiraBrowseUrl(jiraSiteUrl, key) : null;
+      return { key, url };
+    });
+    const linked = realizedBy.filter((r) => r.url);
+    // Wrap the key in inline code so the RU projection protects it byte-exact (a Jira key like
+    // `GRMTCH-5` is not matched by the artifact-id regex, so without this it could be translated — R7).
+    const reverseEdge = linked.length
+      ? `\n\n**Realized by:** ${linked.map((r) => `[\`${r.key}\`](${r.url})`).join(', ')}\n`
+      : '';
+    const englishBody = `${stubbedBody.replace(/\n+$/, '')}${reverseEdge ? reverseEdge : '\n'}`;
+
     const title = titleOf(p);
     const { prefix: titlePrefix, label: titleLabel } = splitTitle(title);
     const parentSource = parents.get(p.relPath) ?? null;
@@ -167,9 +236,9 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
         language ? { title, parentSource, body: englishBody, language } : { title, parentSource, body: englishBody },
       ),
     );
-    // Translating → mask structural spans for the LLM; else ship English as-is.
+    // Translating → mask structural spans AND denylist terms for the LLM; else ship English as-is.
     const { masked, restore } = language
-      ? protectStructuralSpans(englishBody)
+      ? protectStructuralSpans(englishBody, preserveTerms)
       : { masked: englishBody, restore: [] as ProtectedSpan[] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings: string[] = [];
@@ -183,13 +252,26 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     if (stripped.length > 0) {
       warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(', ')}`);
     }
+    if (stubbed.length > 0) {
+      warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(', ')}`);
+    }
+    const unlinked = realizedBy.filter((r) => !r.url);
+    if (unlinked.length > 0) {
+      // Two distinct causes (R6): no site URL at all (every key omitted) vs a known non-Jira
+      // system (only those keys omitted — they have no browse-URL scheme yet).
+      warnings.push(
+        jiraSiteUrl
+          ? `realized_by non-Jira issue(s) — no browse link yet: ${unlinked.map((r) => r.key).join(', ')}`
+          : `realized_by issue(s) present but no jira.siteUrl/confluence.siteUrl — reverse trace link omitted: ${unlinked.map((r) => r.key).join(', ')}`,
+      );
+    }
     envelopes.set(p.relPath, {
       source: p.relPath,
       basename: p.basename,
       title,
       titlePrefix,
       titleLabel,
-      spaceId,
+      spaceKey,
       parentSource,
       language,
       body: masked,
@@ -199,6 +281,8 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       alreadyPublished,
       drifted: alreadyPublished && ledgerHash.get(p.relPath) !== contentHash,
       pageId: publishedMap.get(p.relPath) ?? null,
+      ledgerPageVersion: ledgerVersion.get(p.relPath) ?? null,
+      realizedBy,
       warnings,
     });
   }
@@ -209,5 +293,14 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     .map((r) => ({ page: r.page, source: r.source }))
     .sort((a, b) => a.source.localeCompare(b.source));
 
-  return { spaceId, language, preserveTerms, pages: ordered, orphans };
+  return {
+    spaceKey,
+    spaceId: spaceIdNumeric,
+    cloudId,
+    language,
+    preserveTerms,
+    pages: ordered,
+    orphans,
+    warnings: planWarnings,
+  };
 }

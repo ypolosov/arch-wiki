@@ -41,10 +41,15 @@ export class FileLedgerStore implements LedgerStorePort {
 
   async appendIssue(row: IssueLedgerRow): Promise<boolean> {
     const rows = await this.readIssues();
-    if (rows.some((r) => r.key === row.key && r.sourceId === row.sourceId && r.kind === row.kind && r.role === row.role)) {
-      return false;
+    const idx = rows.findIndex(
+      (r) => r.key === row.key && r.sourceId === row.sourceId && r.kind === row.kind && r.role === row.role,
+    );
+    if (idx >= 0) {
+      if (rows[idx]!.contentHash === row.contentHash) return false; // identical → no-op
+      rows[idx] = row; // upsert-on-drift (key = key+sourceId+kind+role) — refresh the recorded hash
+    } else {
+      rows.push(row);
     }
-    rows.push(row);
     rows.sort((a, b) => a.key.localeCompare(b.key));
     await this.writeArray(ISSUES_FILE, 'issues', rows);
     return true;
@@ -58,8 +63,20 @@ export class FileLedgerStore implements LedgerStorePort {
     const rows = await this.readPages();
     const idx = rows.findIndex((r) => r.page === row.page && r.source === row.source);
     if (idx >= 0) {
-      if (rows[idx]!.contentHash === row.contentHash) return false; // identical → no-op
-      rows[idx] = row; // upsert-on-drift (key = page+source)
+      const existing = rows[idx]!;
+      // An OMITTED incoming pageVersion means "no new baseline" — carry the recorded one forward
+      // rather than wiping it. Otherwise a content-identical re-record without --page-version (e.g.
+      // a pass-2 re-record) would null the baseline and silently disable the destination-drift
+      // guard (review H2). A SUPPLIED pageVersion still refreshes the baseline (R1, v0.8).
+      const merged: PageLedgerRow =
+        row.pageVersion == null && existing.pageVersion != null
+          ? { ...row, pageVersion: existing.pageVersion }
+          : row;
+      // No-op ONLY when BOTH the content hash AND the (merged) drift baseline match.
+      if (existing.contentHash === merged.contentHash && existing.pageVersion === merged.pageVersion) {
+        return false;
+      }
+      rows[idx] = merged; // upsert-on-drift (key = page+source) — refresh hash and/or pageVersion
     } else {
       rows.push(row);
     }

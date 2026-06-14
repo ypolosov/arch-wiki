@@ -19,7 +19,7 @@ const clock = { now: () => new Date('2026-06-08T00:00:00Z') };
 const TASKS = {
   language: 'ru',
   prefixes: { arch: '[Arch]', techdesign: '[Techdesign]' },
-  rolePrefixes: { be: '[BE][Techdesign]', fe: '[FE][Techdesign]', do: '[DO][Techdesign]' },
+  rolePrefixes: { be: '[BE] [Techdesign]', fe: '[FE] [Techdesign]', do: '[DO] [Techdesign]' },
 };
 const CONFIG = ProjectConfig.from(ProjectConfigSchema.parse({ tasks: TASKS }));
 const CONFIG_CF = ProjectConfig.from(
@@ -115,8 +115,8 @@ describe('renderIssuePayload + recordIssue (integration)', () => {
   it('techdesign --role be picks the role prefix', async () => {
     const root = await tmpRoot();
     const env = await renderIssuePayload({ from: 'QA-001', kind: 'techdesign', role: 'be' }, deps(root));
-    expect(env.prefix).toBe('[BE][Techdesign]');
-    expect(env.issueTitle).toBe('[BE][Techdesign] Latency');
+    expect(env.prefix).toBe('[BE] [Techdesign]');
+    expect(env.issueTitle).toBe('[BE] [Techdesign] Latency');
   });
 
   it('unresolvable --from → exit 2', async () => {

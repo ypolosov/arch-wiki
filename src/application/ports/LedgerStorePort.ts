@@ -22,6 +22,14 @@ export interface PageLedgerRow {
   contentHash: string;
   publishedAt: string;
   system: string;
+  /**
+   * The Confluence page version recorded at publish (CAP-2 destination-drift guard, v0.8).
+   * Optional + read tolerantly (pre-0.8 ledgers omit it) — NO ledger migration. The
+   * orchestrator compares the LIVE page version against this before update; a higher live
+   * version means a hand-edit it must not clobber without --force. NOT an idempotency key
+   * (the English contentHash stays the sole key, invariant #7) — a destination cross-check only.
+   */
+  pageVersion?: number;
 }
 
 /** Ingress ledger for read-only snapshots pulled from an upstream source (CAP-1). */
@@ -46,7 +54,7 @@ export interface PulledSourceRow {
 export interface LedgerStorePort {
   /** Issue ledger rows (`[]` if absent). */
   readIssues(): Promise<IssueLedgerRow[]>;
-  /** Append a row idempotently (no-op if an identical key/source/kind/role exists). */
+  /** Upsert by `(key, sourceId, kind, role)`: false if identical, else (re)writes the hash (drift). */
   appendIssue(row: IssueLedgerRow): Promise<boolean>;
   /** Published-page ledger rows (`[]` if absent) — CAP-2 mirror. */
   readPages(): Promise<PageLedgerRow[]>;

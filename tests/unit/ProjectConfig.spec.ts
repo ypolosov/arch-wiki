@@ -36,12 +36,12 @@ describe('ProjectConfig (pure)', () => {
       tasks: {
         language: 'ru',
         prefixes: { arch: '[Arch]', techdesign: '[Techdesign]' },
-        rolePrefixes: { be: '[BE][Techdesign]' },
+        rolePrefixes: { be: '[BE] [Techdesign]' },
       },
     });
     expect(c.language()).toBe('ru');
     expect(c.taskPrefix('arch')).toBe('[Arch]');
-    expect(c.taskPrefix('techdesign', 'be')).toBe('[BE][Techdesign]');
+    expect(c.taskPrefix('techdesign', 'be')).toBe('[BE] [Techdesign]');
     expect(() => c.taskPrefix('techdesign', 'qa')).toThrow(); // unknown role
   });
 
@@ -68,5 +68,28 @@ describe('ProjectConfig (pure)', () => {
     expect(
       cfg({ integrations: { confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net/' } } }).confluenceSiteUrl(),
     ).toBe('https://acme.atlassian.net');
+  });
+
+  it('confluenceSpaceId()/confluenceCloudId(): numeric id + cloudId, null when absent (v0.8)', () => {
+    expect(ProjectConfig.from(null).confluenceSpaceId()).toBeNull();
+    expect(ProjectConfig.from(null).confluenceCloudId()).toBeNull();
+    const c = cfg({ integrations: { confluence: { space: 'PP', spaceId: '163845', cloudId: 'cloud-1' } } });
+    expect(c.confluenceSpaceId()).toBe('163845');
+    expect(c.confluenceCloudId()).toBe('cloud-1');
+  });
+
+  it('jiraSiteUrl(): prefers jira.siteUrl, falls back to confluence.siteUrl, null when neither (v0.8)', () => {
+    expect(ProjectConfig.from(null).jiraSiteUrl()).toBeNull();
+    expect(
+      cfg({ integrations: { confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net' } } }).jiraSiteUrl(),
+    ).toBe('https://acme.atlassian.net'); // fallback to confluence host
+    expect(
+      cfg({
+        integrations: {
+          jira: { siteUrl: 'https://jira.acme.net/' },
+          confluence: { space: 'PP', siteUrl: 'https://acme.atlassian.net' },
+        },
+      }).jiraSiteUrl(),
+    ).toBe('https://jira.acme.net'); // jira.siteUrl wins, trailing slash trimmed
   });
 });

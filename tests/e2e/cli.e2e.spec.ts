@@ -410,6 +410,46 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     )!;
     expect(cache2.alreadyPublished).toBe(true);
     expect(cache2.drifted).toBe(false); // hash recorded from the plan matches → no false drift
+
+    // v0.8: --page on a non-existent source FAILS FAST (exit 2), not a silent empty success.
+    let pageExit = 0;
+    try {
+      execFileSync('node', [CLI, 'render-confluence', '--page', 'entities/nope.md', '--cwd', root], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+    } catch (e: unknown) {
+      pageExit = (e as { status: number }).status;
+    }
+    expect(pageExit).toBe(2);
+
+    // v0.8: record-page --page-version round-trips into the ledger as ledgerPageVersion (drift baseline).
+    run(['record-page', '--source', 'index.md', '--page', '1001', '--from-plan', planFile, '--page-version', '7', '--cwd', root], root);
+    const plan3 = run(['render-confluence', '--all', '--cwd', root], root);
+    const idx = (plan3.data.pages as Array<{ source: string; ledgerPageVersion: number | null }>).find(
+      (p) => p.source === 'index.md',
+    )!;
+    expect(idx.ledgerPageVersion).toBe(7);
+
+    // v0.8 R3: a non-numeric --page-version FAILS FAST (exit 1), not a silent NaN. Strict decimal:
+    // 'v7' and non-decimal numeric literals like '0x10'/'1e3' are all rejected (review M5).
+    for (const bad of ['v7', '0x10', '1e3']) {
+      let badVerExit = 0;
+      try {
+        execFileSync('node', [CLI, 'record-page', '--source', 'index.md', '--page', '1001', '--page-version', bad, '--cwd', root], {
+          cwd: root,
+          encoding: 'utf8',
+        });
+      } catch (e: unknown) {
+        badVerExit = (e as { status: number }).status;
+      }
+      expect(badVerExit).toBe(1);
+    }
+
+    // v0.8 C-2: --page emits the target PLUS its ancestor chain (parent-first), not just the leaf.
+    const branch = run(['render-confluence', '--page', 'entities/cache.md', '--cwd', root], root);
+    const branchSources = (branch.data.pages as Array<{ source: string }>).map((p) => p.source);
+    expect(branchSources).toEqual(['index.md', 'entities/cache.md']); // parent before child
   });
 
   it('CAP-2 RU: finalize-confluence restores protected spans into a translated body', async () => {

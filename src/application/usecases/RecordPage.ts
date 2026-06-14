@@ -12,6 +12,8 @@ export interface RecordPageInput {
   page?: string;
   /** Content hash from render-confluence (omit for --delete). */
   hash?: string;
+  /** Confluence page version returned by create/update (destination-drift baseline, v0.8). */
+  pageVersion?: number;
   /** External system (default confluence). */
   system?: string;
   /** Reconcile a deleted orphan: drop its ledger row + published_as backref. */
@@ -73,6 +75,7 @@ export async function recordPage(
     contentHash: input.hash,
     publishedAt: clock.now().toISOString(),
     system,
+    ...(input.pageVersion != null ? { pageVersion: input.pageVersion } : {}),
   });
 
   // Write published_as back into the source page frontmatter (idempotent).

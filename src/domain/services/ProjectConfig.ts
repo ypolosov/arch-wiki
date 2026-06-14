@@ -112,6 +112,25 @@ export class ProjectConfig {
     return u ? u.replace(/\/+$/, '') : null;
   }
 
+  /** OPTIONAL. The NUMERIC Confluence space id (createConfluencePage needs it, not the KEY); null if unset. */
+  confluenceSpaceId(): string | null {
+    return this.cfg.integrations?.confluence?.spaceId ?? null;
+  }
+
+  /** OPTIONAL. The Confluence cloudId (create/update require it); null if unset. */
+  confluenceCloudId(): string | null {
+    return this.cfg.integrations?.confluence?.cloudId ?? null;
+  }
+
+  /**
+   * OPTIONAL. Atlassian site base URL for Jira browse links (reverse trace edge). Prefers
+   * integrations.jira.siteUrl, falls back to confluence.siteUrl (same Atlassian site); null if neither.
+   */
+  jiraSiteUrl(): string | null {
+    const u = this.cfg.integrations?.jira?.siteUrl ?? this.cfg.integrations?.confluence?.siteUrl;
+    return u ? u.replace(/\/+$/, '') : null;
+  }
+
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent — the PO User Story Log source (pull-stories). */
   userStoryLog(): NonNullable<
     NonNullable<NonNullable<ProjectConfigFile['integrations']>['upstream']>['userStoryLog']

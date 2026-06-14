@@ -1,6 +1,6 @@
 {
   "name": "arch-wiki",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Deterministic core (CLI) for the arch-wiki Claude Code plugin.",
   "license": "MIT",

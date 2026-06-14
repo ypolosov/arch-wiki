@@ -173,15 +173,29 @@ pass them as `${ENV}`. Commands that need one (`render-issue`, `publish`) first
 (the wiki canon). Set `integrations.confluence.language` (e.g. `"ru"`) to publish a TRANSLATED
 projection: the canon stays English in `docs/architecture/**`, and `publish` translates prose / headings /
 link-labels **and the page title** (label only — the `UC-014:` id prefix stays byte-exact) at publish time
-while Core protects structural spans (code, link URLs, artifact ids) and keeps every term in
-`integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — verbatim. The content
+while Core **masks** structural spans (code, link URLs, artifact ids) AND every term in
+`integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — into opaque placeholders,
+so they survive translation byte-exact by Core enforcement (not by the translator's discretion). The content
 hash is over the English source, so a translated mirror never drifts on its own; a not-yet-published
 cross-link is reserved as a `…/pages/pending` masked link so the translation is reused across the 2-pass
 publish (not re-translated). Repo-relative links (`../iterations/`, `CLAUDE.md`) are dead in Confluence →
 Core neutralizes them to plain text. **Structural/methodology labels stay English** — the QA-scenario
 6-part labels (Source/Stimulus/Artifact/Environment/Response/Measure), arc42 section markers and ADD field
-names / structural table headers are translated only in their VALUES, not the labels themselves; add them to
-`integrations.confluence.preserveTerms` to enforce it deterministically.
+names / structural table headers are translated only in their VALUES, not the labels themselves; add a label
+to `integrations.confluence.preserveTerms` and Core masks every occurrence to a placeholder (a Core mask, not
+a translator instruction) — enforcing it deterministically.
+
+**Confluence publish config (v0.8).** `createConfluencePage`/`updateConfluencePage` need the **numeric**
+`integrations.confluence.spaceId` (NOT the space KEY — the key returns HTTP 400; look it up once via
+`getConfluenceSpaces(keys:["<KEY>"])`) plus `integrations.confluence.cloudId`; `space` (the KEY) is still used
+for the `/wiki/spaces/<KEY>/pages/<id>` cross-link URLs. `render-confluence` runs a preflight and lists any
+missing field in `data.warnings`. **Destination-drift guard:** `record-page --page-version <n>` stores the
+published Confluence page version in the ledger; before an update, `publish` compares the LIVE version to it
+and refuses to clobber a hand-edited page (override only on explicit force) — the verdict is deterministic,
+not eyeballed. **Reverse trace edge:** the mirror page links back to its realizing Jira issue (from
+`realized_by`); set `integrations.jira.siteUrl` (or it reuses `confluence.siteUrl`) for the absolute
+`…/browse/<KEY>` link. **C4 diagrams:** local image embeds become a deterministic placeholder in the mirror
+(the MCP has no attachment upload) — attach diagrams manually in Confluence for now.
 
 **Issue → mirror trace (`/arch-wiki:issue`).** The issue body stays self-contained (inlined excerpts); a
 `## Источник` section links each referenced artifact to its Confluence mirror page (from the published-pages
