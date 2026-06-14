@@ -33,14 +33,19 @@ placeholders deterministically — pipe the translated body back through Core:
 `data.body` from its output. If it reports `missing` (a placeholder was dropped) or exits 2, **re-translate**
 that page — never publish a page that lost protected content. **Title (v0.7):** translate `data.titleLabel`
 (keep `data.preserveTerms` verbatim) and set the page title to `<data.titlePrefix> <translated label>` — the
-id prefix (`UC-014:`) stays byte-exact, no mixed-language headings. When `data.language` is null, publish
-`body` + `title` as-is (English).
+id prefix (`UC-014:`) stays byte-exact, no mixed-language headings. **Structural labels stay English:** the
+QA-scenario 6-part labels (Source / Stimulus / Artifact / Environment / Response / Measure), arc42 section
+markers and ADD field names / structural table headers — translate only their VALUES/prose, not the labels
+(add them to `preserveTerms` to enforce it deterministically). When `data.language` is null, publish `body` +
+`title` as-is (English).
 
 4. **Pass 1 — create/update parent-first.** For each page in plan order: [translate + `finalize-confluence`
    if `language`] → `createConfluencePage` / `updateConfluencePage` (`contentFormat: markdown`, `spaceId`,
    `parentId` = the parent source's recorded page-id) → `arch-wiki record-page --source <relPath> --page
-   <pageId> --hash <contentHash>` (`contentHash` is over the English source, so it is the same whether or
-   not you translated — idempotency holds). Skip pages with `alreadyPublished && !drifted`.
+   <pageId> --from-plan /tmp/aw-mirror.json` (reads the page's CURRENT `contentHash` from the saved plan —
+   do NOT hand-copy `--hash`; on pass 2 cross-link resolution changes the hash and a stale copy records a
+   false drift). `contentHash` is over the English source, so it is the same whether or not you translated.
+   Skip pages with `alreadyPublished && !drifted`.
    **Destination-drift safety:** before an update, compare the page's Confluence version against the ledger;
    if it was hand-edited in Confluence after publish, WARN and skip unless the SA forces it.
 5. **Pass 2 — re-render, update drifted.** Re-run `arch-wiki render-confluence --all > /tmp/aw-mirror.json`.

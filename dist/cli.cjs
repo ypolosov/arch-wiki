@@ -9469,9 +9469,6 @@ function resolveTraceLinks(args) {
   }
   return { traceLinks, warnings };
 }
-function renderTraceMarkdown(links) {
-  return links.map((l) => `- [${l.id ? `${l.id} \u2014 ` : ""}${l.title}](${l.url})`).join("\n");
-}
 async function renderIssuePayload(input, deps) {
   const { repo, payloads, config, ledger, hash } = deps;
   const from = input.from?.trim();
@@ -9510,8 +9507,7 @@ async function renderIssuePayload(input, deps) {
     prefix,
     title,
     source: basename2,
-    driver: driverLink,
-    trace: renderTraceMarkdown(traceLinks)
+    driver: driverLink
   });
   const warnings = [
     ...unresolved.length ? [`unresolved template tokens: ${unresolved.join(", ")}`] : [],
@@ -10652,8 +10648,23 @@ async function applyMigration(store, ctx, opts) {
   return { from: current, to: target, pending, applied };
 }
 
+// src/domain/services/SemVer.ts
+function parseSemver(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function isNewerVersion(candidate, current) {
+  const a = parseSemver(candidate);
+  const b = parseSemver(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.7.0";
+var PLUGIN_VERSION = "0.7.1";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -10697,11 +10708,52 @@ function csv(value) {
 function sha256(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
 }
+async function readPlanPages(fs2, planArg, cwd) {
+  const planText = await fs2.readFile(path8.isAbsolute(planArg) ? planArg : path8.join(cwd, planArg));
+  let parsed;
+  try {
+    parsed = JSON.parse(planText);
+  } catch (e) {
+    throw new DomainError(`malformed plan JSON: ${e.message}`, 2);
+  }
+  const env = parsed;
+  const pages = env.data?.pages ?? env.pages;
+  if (!Array.isArray(pages)) throw new DomainError("plan has no data.pages[]", 2);
+  return pages;
+}
 function pluginRoot() {
   return process.env.ARCH_WIKI_PLUGIN_ROOT ?? path8.resolve(__dirname, "..");
 }
 function templatesDir() {
   return process.env.ARCH_WIKI_TEMPLATES_DIR ?? path8.join(pluginRoot(), "templates");
+}
+async function newerInstalledVersion(fs2) {
+  try {
+    let dir = pluginRoot();
+    for (let i = 0; i < 8; i++) {
+      const candidate = path8.join(dir, "installed_plugins.json");
+      if (await fs2.exists(candidate)) {
+        const json = JSON.parse(await fs2.readFile(candidate));
+        for (const [key, entries] of Object.entries(json.plugins ?? {})) {
+          if (!/^arch-wiki@/.test(key)) continue;
+          for (const e of entries ?? []) {
+            if (e?.version && isNewerVersion(e.version, PLUGIN_VERSION)) return e.version;
+          }
+        }
+        return null;
+      }
+      const parent = path8.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+  }
+  return null;
+}
+function staleBinaryWarning(newer) {
+  return newer ? [
+    `a newer arch-wiki (${newer}) is installed but this PATH binary is ${PLUGIN_VERSION} \u2014 restart the Claude Code session (the binary + MCP registry resolve at session start), or call the new version by full path`
+  ] : void 0;
 }
 function payloadsDir() {
   return path8.join(templatesDir(), "payloads");
@@ -10980,16 +11032,27 @@ async function main() {
       fail("render-confluence", err);
     }
   });
-  cli.command("record-page", "record a published Confluence page in the ledger + published_as frontmatter").option("--source <path>", "wiki-relative source path (the ledger key)").option("--page <id>", "external Confluence page id").option("--hash <hash>", "content hash from render-confluence").option("--system <system>", "external system (default confluence)").option("--delete", "reconcile a deleted orphan: drop the ledger row + published_as").action(async (opts) => {
+  cli.command("record-page", "record a published Confluence page in the ledger + published_as frontmatter").option("--source <path>", "wiki-relative source path (the ledger key)").option("--page <id>", "external Confluence page id").option("--hash <hash>", "content hash from render-confluence").option("--from-plan <file>", "read --hash (+ --page if absent) for --source from a saved render-confluence plan (avoids a stale hand-copied hash; pass-2 resolves cross-links \u2192 the hash changes)").option("--system <system>", "external system (default confluence)").option("--delete", "reconcile a deleted orphan: drop the ledger row + published_as").action(async (opts) => {
     try {
       if (!opts.source) throw new DomainError("missing --source", 1);
       const fs2 = new NodeFileSystem();
       const root = wikiRoot(opts);
+      let hash = opts.hash != null ? String(opts.hash) : void 0;
+      let page = opts.page != null ? String(opts.page) : void 0;
+      if (opts["fromPlan"]) {
+        const pages = await readPlanPages(fs2, String(opts["fromPlan"]), opts.cwd ?? process.cwd());
+        const p = pages.find((x) => x.source === String(opts.source));
+        if (!p) {
+          throw new DomainError(`record-page: no page with source "${opts.source}" in the plan`, 2);
+        }
+        if (p.contentHash != null) hash = String(p.contentHash);
+        if (page == null && p.pageId != null) page = String(p.pageId);
+      }
       const result = await recordPage(
         {
           source: String(opts.source),
-          page: opts.page != null ? String(opts.page) : void 0,
-          hash: opts.hash != null ? String(opts.hash) : void 0,
+          page,
+          hash,
           system: opts.system != null ? String(opts.system) : void 0,
           del: !!opts["delete"]
         },
@@ -11088,7 +11151,8 @@ async function main() {
           templatesDir: tdir,
           templatesPresent: await fs2.exists(tdir),
           config
-        }
+        },
+        warnings: staleBinaryWarning(await newerInstalledVersion(fs2))
       });
     } catch (err) {
       fail("doctor", err);
@@ -11330,7 +11394,12 @@ async function main() {
       data.targetSchema = marker?.schemaVersion ?? null;
       data.migrationNeeded = (marker?.schemaVersion ?? 0) < CURRENT_SCHEMA_VERSION;
     }
-    emit({ ok: true, command: "version", data });
+    emit({
+      ok: true,
+      command: "version",
+      data,
+      warnings: staleBinaryWarning(await newerInstalledVersion(new NodeFileSystem()))
+    });
   });
   cli.help();
   cli.parse(process.argv, { run: false });

@@ -394,17 +394,22 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     const cache = pages.find((p) => p.source === 'entities/cache.md')!;
     expect(cache).toBeTruthy();
 
+    // v0.7.1: record-page --from-plan reads the page's current contentHash from the saved plan
+    // (no hand-copied --hash → no stale-hash false drift on pass 2).
+    const planFile = path.join(root, 'mirror.json');
+    await fs.writeFile(planFile, JSON.stringify(plan));
     const rec = run(
-      ['record-page', '--source', 'entities/cache.md', '--page', '4242', '--hash', cache.contentHash, '--cwd', root],
+      ['record-page', '--source', 'entities/cache.md', '--page', '4242', '--from-plan', planFile, '--cwd', root],
       root,
     );
     expect((rec.data as { ledgerAppended: boolean }).ledgerAppended).toBe(true);
 
     const plan2 = run(['render-confluence', '--all', '--cwd', root], root);
-    const cache2 = (plan2.data.pages as Array<{ source: string; alreadyPublished: boolean }>).find(
+    const cache2 = (plan2.data.pages as Array<{ source: string; alreadyPublished: boolean; drifted: boolean }>).find(
       (p) => p.source === 'entities/cache.md',
     )!;
     expect(cache2.alreadyPublished).toBe(true);
+    expect(cache2.drifted).toBe(false); // hash recorded from the plan matches → no false drift
   });
 
   it('CAP-2 RU: finalize-confluence restores protected spans into a translated body', async () => {

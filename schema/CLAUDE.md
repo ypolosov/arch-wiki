@@ -178,7 +178,10 @@ while Core protects structural spans (code, link URLs, artifact ids) and keeps e
 hash is over the English source, so a translated mirror never drifts on its own; a not-yet-published
 cross-link is reserved as a `…/pages/pending` masked link so the translation is reused across the 2-pass
 publish (not re-translated). Repo-relative links (`../iterations/`, `CLAUDE.md`) are dead in Confluence →
-Core neutralizes them to plain text.
+Core neutralizes them to plain text. **Structural/methodology labels stay English** — the QA-scenario
+6-part labels (Source/Stimulus/Artifact/Environment/Response/Measure), arc42 section markers and ADD field
+names / structural table headers are translated only in their VALUES, not the labels themselves; add them to
+`integrations.confluence.preserveTerms` to enforce it deterministically.
 
 **Issue → mirror trace (`/arch-wiki:issue`).** The issue body stays self-contained (inlined excerpts); a
 `## Источник` section links each referenced artifact to its Confluence mirror page (from the published-pages

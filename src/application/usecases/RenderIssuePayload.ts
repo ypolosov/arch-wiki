@@ -122,11 +122,6 @@ function resolveTraceLinks(args: {
   return { traceLinks, warnings };
 }
 
-/** Render trace links as a markdown bullet list for the `{{trace}}` template token. */
-function renderTraceMarkdown(links: TraceLink[]): string {
-  return links.map((l) => `- [${l.id ? `${l.id} — ` : ''}${l.title}](${l.url})`).join('\n');
-}
-
 /**
  * Deterministically render an issue payload (IntentEnvelope) from a source driver/ADR.
  * Core renders; the LLM maps to MCP and performs the side-effect (invariant 6, no
@@ -164,8 +159,10 @@ export async function renderIssuePayload(
   const title = sourcePage?.headings[0] ? cleanTitle(sourcePage.headings[0]) : basename;
   const driverLink = `[[${basename}|${from}]]`;
 
-  // CAP-2 trace links (v0.7): keep the issue body self-contained (inlined excerpts) AND add a
-  // navigable `## Источник` link to each artifact's Confluence mirror page. Presentation only.
+  // CAP-2 trace links (v0.7): the issue body stays self-contained (inlined excerpts); the
+  // command embeds each artifact's Confluence mirror link INLINE at its first mention (v0.7.1 —
+  // like the wiki mirror, no separate section). `traceLinks` is the data for that; presentation
+  // only (NOT in contentHash, so publishing/refreshing the mirror never drifts an existing issue).
   const { traceLinks, warnings: traceWarnings } = resolveTraceLinks({
     from,
     title,
@@ -183,7 +180,6 @@ export async function renderIssuePayload(
     title,
     source: basename,
     driver: driverLink,
-    trace: renderTraceMarkdown(traceLinks),
   });
   const warnings = [
     ...(unresolved.length ? [`unresolved template tokens: ${unresolved.join(', ')}`] : []),

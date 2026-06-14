@@ -1,5 +1,5 @@
 ---
-description: Create a self-contained Jira/GitLab issue from a chosen driver/ADR — inline the relevant text (no wiki ids/links in the body) plus a `## Источник` link to the Confluence mirror, human-gated, then create via MCP and record the trace.
+description: Create a self-contained Jira/GitLab issue from a chosen driver/ADR — inline the relevant text with the Confluence-mirror link embedded at each artifact's first mention, human-gated, then create via MCP and record the trace.
 argument-hint: <ID> <arch|techdesign> [be|fe|do]
 allowed-tools: Bash(arch-wiki:*), Read, ToolSearch
 ---
@@ -19,16 +19,20 @@ into an issue (from `kanban.md` / `lint`); this command renders and creates exac
 4. Compose a **self-contained RU issue body**. RULES:
    - **Inline** the relevant text from each referenced artifact — the reader must understand
      the issue body without opening the wiki.
-   - In the BODY: **do NOT mention wiki artifact ids** (QA-…, ADR-…, CON-…) and **do NOT add links**.
-   - **`## Источник` is the ONE place links belong:** drop in `data.traceLinks` — navigable links
-     to the Confluence MIRROR pages of the source + referenced artifacts (the human trace; the
-     ledger + `realized_by` frontmatter stay the machine trace). If `traceLinks` is empty, omit the
-     section and tell the SA to run `/arch-wiki:publish` first (targets must be mirrored to resolve
-     a link). Absolute links need `integrations.confluence.siteUrl`; otherwise they are root-relative
-     (still resolve from Jira on the same Atlassian site).
-   - **No other footer.**
+   - **Embed each artifact's Confluence-mirror link INLINE at its first mention** — exactly like the
+     wiki mirror does, e.g. `Keycloak ([ADR-011](url)) отвечает за identity`. Take the url from
+     `data.traceLinks` (`{id,title,url}`), matching by `id`/`title`. **Do NOT add a `## Источник`
+     section, a bullet dump, or a meta-note** ("ссылки встроены выше" etc.) — the body ends on its
+     last meaningful section. A bare artifact id only ever appears as a link label, never as plain text.
+   - If a referenced artifact has a `traceLinks` entry but isn't naturally named in the prose, weave a
+     short inline mention carrying its link rather than listing it separately.
+   - If `data.traceLinks` is empty, add no links and tell the SA to run `/arch-wiki:publish` first
+     (targets must be mirrored to resolve a link). Absolute links need `integrations.confluence.siteUrl`;
+     otherwise they are root-relative (still resolve from Jira on the same Atlassian site). The ledger +
+     `realized_by` frontmatter remain the machine trace.
+   - **No footer.**
    - Sections (arch): Контекст · Цель · Объём (in/out) · Артефакт-результат · Требования и
-     ограничения · DoD · Приоритет · Источник. (techdesign: see its payload template's sections.)
+     ограничения · DoD · Приоритет. (techdesign: see its payload template's sections.)
 5. **Human gate:** show the composed issue to the SA; get explicit approval before any write.
 6. `ToolSearch "mcp jira|gitlab"`; if none → "MCP not configured, see CLAUDE.md#MCP-Setup"
    and stop. Otherwise create the issue (project from `integrations.jira.projectKey`).

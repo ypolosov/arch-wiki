@@ -44,6 +44,7 @@ import { resolveKind, ARTIFACT_SPECS, ArtifactKind } from '../domain/model/Artif
 import { kindOfPage } from '../domain/model/WikiPage';
 import { Severity } from '../domain/services/LintRuleSet';
 import { isProtectedWritePath } from '../domain/services/PathUtil';
+import { isNewerVersion } from '../domain/services/SemVer';
 import { DomainError } from '../domain/errors';
 import { PLUGIN_VERSION } from './version';
 
@@ -99,6 +100,25 @@ function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+/** Read the `data.pages[]` array from a saved `render-confluence` plan file (exit 2 on malformed). */
+async function readPlanPages(
+  fs: NodeFileSystem,
+  planArg: string,
+  cwd: string,
+): Promise<Array<Record<string, unknown>>> {
+  const planText = await fs.readFile(path.isAbsolute(planArg) ? planArg : path.join(cwd, planArg));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(planText);
+  } catch (e) {
+    throw new DomainError(`malformed plan JSON: ${(e as Error).message}`, 2);
+  }
+  const env = parsed as { data?: { pages?: unknown }; pages?: unknown };
+  const pages = (env.data?.pages ?? env.pages) as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(pages)) throw new DomainError('plan has no data.pages[]', 2);
+  return pages;
+}
+
 interface GlobalOpts {
   cwd?: string;
   root?: string;
@@ -119,6 +139,49 @@ function pluginRoot(): string {
 
 function templatesDir(): string {
   return process.env.ARCH_WIKI_TEMPLATES_DIR ?? path.join(pluginRoot(), 'templates');
+}
+
+/**
+ * Best-effort: from the running bundle's plugin dir, walk up to the harness's
+ * `installed_plugins.json` and report a registered arch-wiki version newer than the one
+ * we were bundled as. The PATH `arch-wiki` resolves at session start, so after `claude
+ * plugin update` the old binary keeps answering until restart — this surfaces that as a
+ * `version`/`doctor` warning. Environment introspection, warning-only: NEVER throws
+ * (no install layout / local --plugin-dir → null, silent).
+ */
+async function newerInstalledVersion(fs: NodeFileSystem): Promise<string | null> {
+  try {
+    let dir = pluginRoot();
+    for (let i = 0; i < 8; i++) {
+      const candidate = path.join(dir, 'installed_plugins.json');
+      if (await fs.exists(candidate)) {
+        const json = JSON.parse(await fs.readFile(candidate)) as {
+          plugins?: Record<string, Array<{ version?: string }> | undefined>;
+        };
+        for (const [key, entries] of Object.entries(json.plugins ?? {})) {
+          if (!/^arch-wiki@/.test(key)) continue;
+          for (const e of entries ?? []) {
+            if (e?.version && isNewerVersion(e.version, PLUGIN_VERSION)) return e.version;
+          }
+        }
+        return null;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // best-effort only — never block a command on environment introspection
+  }
+  return null;
+}
+
+function staleBinaryWarning(newer: string | null): string[] | undefined {
+  return newer
+    ? [
+        `a newer arch-wiki (${newer}) is installed but this PATH binary is ${PLUGIN_VERSION} — restart the Claude Code session (the binary + MCP registry resolve at session start), or call the new version by full path`,
+      ]
+    : undefined;
 }
 
 function payloadsDir(): string {
@@ -496,6 +559,7 @@ async function main(): Promise<void> {
     .option('--source <path>', 'wiki-relative source path (the ledger key)')
     .option('--page <id>', 'external Confluence page id')
     .option('--hash <hash>', 'content hash from render-confluence')
+    .option('--from-plan <file>', 'read --hash (+ --page if absent) for --source from a saved render-confluence plan (avoids a stale hand-copied hash; pass-2 resolves cross-links → the hash changes)')
     .option('--system <system>', 'external system (default confluence)')
     .option('--delete', 'reconcile a deleted orphan: drop the ledger row + published_as')
     .action(async (opts: GlobalOpts & Record<string, unknown>) => {
@@ -503,11 +567,22 @@ async function main(): Promise<void> {
         if (!opts.source) throw new DomainError('missing --source', 1);
         const fs = new NodeFileSystem();
         const root = wikiRoot(opts);
+        let hash = opts.hash != null ? String(opts.hash) : undefined;
+        let page = opts.page != null ? String(opts.page) : undefined;
+        if (opts['fromPlan']) {
+          const pages = await readPlanPages(fs, String(opts['fromPlan']), opts.cwd ?? process.cwd());
+          const p = pages.find((x) => x.source === String(opts.source));
+          if (!p) {
+            throw new DomainError(`record-page: no page with source "${opts.source}" in the plan`, 2);
+          }
+          if (p.contentHash != null) hash = String(p.contentHash); // authoritative: the plan's current hash
+          if (page == null && p.pageId != null) page = String(p.pageId);
+        }
         const result = await recordPage(
           {
             source: String(opts.source),
-            page: opts.page != null ? String(opts.page) : undefined,
-            hash: opts.hash != null ? String(opts.hash) : undefined,
+            page,
+            hash,
             system: opts.system != null ? String(opts.system) : undefined,
             del: !!opts['delete'],
           },
@@ -624,6 +699,7 @@ async function main(): Promise<void> {
           templatesPresent: await fs.exists(tdir),
           config,
         },
+        warnings: staleBinaryWarning(await newerInstalledVersion(fs)),
       });
     } catch (err) {
       fail('doctor', err);
@@ -945,7 +1021,12 @@ async function main(): Promise<void> {
         data.targetSchema = marker?.schemaVersion ?? null;
         data.migrationNeeded = (marker?.schemaVersion ?? 0) < CURRENT_SCHEMA_VERSION;
       }
-      emit({ ok: true, command: 'version', data });
+      emit({
+        ok: true,
+        command: 'version',
+        data,
+        warnings: staleBinaryWarning(await newerInstalledVersion(new NodeFileSystem())),
+      });
     });
 
   cli.help();

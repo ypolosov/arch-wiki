@@ -143,7 +143,9 @@ describe('renderIssuePayload + recordIssue (integration)', () => {
     expect(env.traceLinks).toEqual([
       { id: 'QA-001', title: 'Latency', url: 'https://acme.atlassian.net/wiki/spaces/PP/pages/555' },
     ]);
-    expect(env.payload).toContain('[QA-001 — Latency](https://acme.atlassian.net/wiki/spaces/PP/pages/555)');
+    // v0.7.1: links are embedded inline by the command from data.traceLinks — the skeleton
+    // carries no `## Источник` dump.
+    expect(env.payload).not.toContain('## Источник');
   });
 
   it('falls back to a root-relative trace link + warning when siteUrl is absent', async () => {
