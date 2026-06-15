@@ -29,8 +29,14 @@ across passes — pass 2 changes only the restore value, so you do **not** re-tr
 
 Note: repo-relative links (`../iterations/`, `CLAUDE.md`, `c4/…`) are **not** wiki cross-links and are
 neutralized to plain text by Core (they would be dead hrefs in Confluence); `data.pages[].warnings` lists them.
-The mirror is a **curated projection**, not a byte copy: Core also strips each page's `## Sources` provenance
-section (it points back to the git source-of-truth `raw/…` files) — no git paths/repo URLs reach Confluence.
+The mirror is a **curated projection**, not a byte copy — the git source-of-truth never reaches Confluence.
+Core removes, before the content hash: the `## Sources` provenance section; `**Source:** raw/…` author fields;
+and repo-internal path references in prose/code/parentheticals (`raw/…`, `docs/architecture/…`, `c4/src/*.c4`,
+`.foam/…`, register files like `risks.md`/`glossary.md`, `*.csv`). The `CLAUDE.md` Layer-3 meta-doc is excluded
+entirely. `data.pages[].warnings` lists each curation. **Acceptance has two tiers:** (i) repo-internal source
+paths MUST be absent; (ii) external/POC git URLs in ADRs (`bitbucket.org/…`, `git.shakuro.com`) are
+decision-evidence and are **kept by design** — they are not KB provenance. The path matcher is a strict anchored
+allowlist, so C4 element ids (`product.gaming.brand.core.service`) and domain terms are never touched.
 A filename/domain-like neutralized label (`CLAUDE.md`) is wrapped in inline code so Confluence does not
 auto-link it to a dead `http://CLAUDE.md`.
 

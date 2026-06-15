@@ -9341,7 +9341,9 @@ function pagesOfKind(g, kinds) {
 // src/domain/services/ConfluenceTree.ts
 var DEFAULT_EXCLUDE = {
   statuses: ["proposed", "rejected"],
-  basenames: ["risks", "gap-analysis", "kanban"]
+  // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
+  // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
+  basenames: ["risks", "gap-analysis", "kanban", "CLAUDE"]
 };
 var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
 function isPageExcluded(page, exclude) {
@@ -9473,6 +9475,63 @@ function stripSourcesSection(content) {
     i += 1;
   }
   return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
+}
+var REPO_PATH_SRC = "(?:(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]+|[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b|(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b)";
+var REPO_PATH_RE = new RegExp(REPO_PATH_SRC, "g");
+var REPO_PATH_CONTAINS_RE = new RegExp(REPO_PATH_SRC);
+var REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`);
+function isRepoInternalPath(token) {
+  return REPO_PATH_ANCHORED_RE.test(token.trim());
+}
+var SOURCE_FIELD_RE = /^\s*[-*]?\s*\*\*Source[^*\n]*:\*\*(.*)$/i;
+function stripSourceProvenanceLines(content) {
+  const lines = content.split("\n");
+  const out = [];
+  let inFence = false;
+  let stripped = false;
+  for (const line of lines) {
+    if (FENCE_LINE_RE.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (!inFence) {
+      const m = SOURCE_FIELD_RE.exec(line);
+      if (m && REPO_PATH_CONTAINS_RE.test(m[1])) {
+        stripped = true;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
+}
+var B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
+var PROVENANCE_PAREN_RE = new RegExp(`[ \\t]*\\((?:from|see|source):?\\s+${REPO_PATH_SRC}[ \\t]*\\)`, "gi");
+var INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
+function neutralizeRepoPaths(content) {
+  let neutralized = false;
+  const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
+    let s = chunk;
+    s = s.replace(PROVENANCE_PAREN_RE, () => {
+      neutralized = true;
+      return "";
+    });
+    s = s.replace(INLINE_CODE_SPAN_RE, (m) => {
+      if (isRepoInternalPath(m.slice(1, -1))) {
+        neutralized = true;
+        return "";
+      }
+      return m;
+    });
+    s = s.replace(REPO_PATH_RE, () => {
+      neutralized = true;
+      return "";
+    });
+    if (s === chunk) return chunk;
+    return s.replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1");
+  });
+  return { body, neutralized };
 }
 function confluencePageUrl(siteUrl, spaceKey, pageId) {
   const base = siteUrl ? siteUrl.replace(/\/+$/, "") : "";
@@ -9911,7 +9970,9 @@ async function renderConfluencePayload(deps) {
   const envelopes = /* @__PURE__ */ new Map();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    const { body: curated, stripped: sourcesStripped } = stripSourcesSection(normalizeBody2(parsed.content));
+    const { body: noSources, stripped: sourcesStripped } = stripSourcesSection(normalizeBody2(parsed.content));
+    const { body: noFields, stripped: fieldsStripped } = stripSourceProvenanceLines(noSources);
+    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(noFields);
     const { body: resolved, crossLinks } = resolveCrossLinks(
       curated,
       graph,
@@ -9961,6 +10022,12 @@ async function renderConfluencePayload(deps) {
     }
     if (sourcesStripped) {
       warnings.push("stripped the `## Sources` provenance section (git source-of-truth is not mirrored)");
+    }
+    if (fieldsStripped) {
+      warnings.push("stripped a `**Source:**` field citing the git source-of-truth");
+    }
+    if (pathsNeutralized) {
+      warnings.push("neutralized repo-internal path reference(s) \u2014 git source-of-truth is not mirrored");
     }
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {
@@ -10838,7 +10905,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.1";
+var PLUGIN_VERSION = "0.8.2";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -10948,6 +11015,15 @@ function wikiRoot(opts) {
 async function loadProjectConfig(opts) {
   const store = new FileProjectConfigStore(wikiRoot(opts), new NodeFileSystem());
   return ProjectConfig.from(await store.read());
+}
+async function assertWikiRootExists(opts) {
+  const root = wikiRoot(opts);
+  if (!await new NodeFileSystem().exists(root)) {
+    throw new DomainError(
+      `wiki root "${root}" does not exist \u2014 run from the repo root, or pass --cwd <repo> / --root <dir>. If you are inside docs/architecture, cd up to the repo root (the default --root re-appends docs/architecture).`,
+      1
+    );
+  }
 }
 function emit(env) {
   process.stdout.write(`${JSON.stringify(env)}
@@ -11200,6 +11276,7 @@ async function main() {
   });
   cli.command("render-confluence", "render the full Confluence KB-mirror plan (CAP-2; MCP-free)").option("--all", "mirror the whole wiki (default)").option("--page <path>", "restrict the emitted plan to a single wiki source path (testing/incremental)").action(async (opts) => {
     try {
+      await assertWikiRootExists(opts);
       const fs2 = new NodeFileSystem();
       const root = wikiRoot(opts);
       const plan = await renderConfluencePayload({

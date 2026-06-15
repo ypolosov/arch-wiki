@@ -423,6 +423,22 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     }
     expect(pageExit).toBe(2);
 
+    // v0.8.2: render-confluence run from INSIDE docs/architecture (the cwd-trap) FAILS FAST (exit 1)
+    // with an actionable wiki-root error, not a confusing "no [integrations.confluence.space]".
+    let trapExit = 0;
+    let trapErr = '';
+    try {
+      execFileSync('node', [CLI, 'render-confluence', '--all', '--cwd', path.join(root, 'docs/architecture')], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+    } catch (e: unknown) {
+      trapExit = (e as { status: number }).status;
+      trapErr = String((e as { stderr?: string }).stderr ?? '');
+    }
+    expect(trapExit).toBe(1);
+    expect(trapErr).toContain('wiki root');
+
     // v0.8: record-page --page-version round-trips into the ledger as ledgerPageVersion (drift baseline).
     run(['record-page', '--source', 'index.md', '--page', '1001', '--from-plan', planFile, '--page-version', '7', '--cwd', root], root);
     const plan3 = run(['render-confluence', '--all', '--cwd', root], root);

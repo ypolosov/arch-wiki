@@ -306,6 +306,29 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(qa1b.contentHash).toBe(qa1.contentHash);
   });
 
+  it('v0.8.2: strips **Source:** fields, neutralizes repo paths, and excludes CLAUDE.md from the mirror', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\n---\n# QA-001: Latency\n\n**Source:** `raw/TODO.md`\n\nThe model lives in `c4/src/iam.c4` (from raw/go-live-plan.csv).\n\nElement `product.gaming.brand.core.service` owns the budget.\n',
+    );
+    // CLAUDE.md is a Layer-3 meta-doc — it must not be mirrored at all (D).
+    await sys.writeFile(path.join(root, 'CLAUDE.md'), '# Contributor guide\n\nRaw: `raw/` · Schema: `CLAUDE.md`\n');
+
+    const plan = await renderConfluencePayload(deps(root));
+    expect(plan.pages.some((p) => p.basename === 'CLAUDE')).toBe(false); // D: excluded from the mirror
+
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.body).not.toContain('Source'); // A: **Source:** field line dropped
+    expect(qa1.body).not.toContain('raw/TODO.md');
+    expect(qa1.body).not.toContain('c4/src/iam.c4'); // B: inline-code repo path dropped
+    expect(qa1.body).not.toContain('raw/go-live-plan.csv'); // B: provenance parenthetical dropped
+    expect(qa1.body).toContain('product.gaming.brand.core.service'); // no false positive on the C4 id
+    expect(qa1.warnings.some((w) => w.includes('**Source:**'))).toBe(true);
+    expect(qa1.warnings.some((w) => w.includes('repo-internal path'))).toBe(true);
+  });
+
   it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();

@@ -179,9 +179,14 @@ so they survive translation byte-exact by Core enforcement (not by the translato
 hash is over the English source, so a translated mirror never drifts on its own; a not-yet-published
 cross-link is reserved as a `…/pages/pending` masked link so the translation is reused across the 2-pass
 publish (not re-translated). Repo-relative links (`../iterations/`, `CLAUDE.md`) are dead in Confluence →
-Core neutralizes them to plain text. The mirror is a CURATED projection (not a byte copy): Core also
-strips each page's `## Sources` provenance section so the git source-of-truth (`raw/…` paths) never
-leaks into Confluence — the wiki schema (rule 6, Sources stays in the wiki) is unaffected. **Structural/methodology labels stay English** — the QA-scenario
+Core neutralizes them to plain text. The mirror is a CURATED projection (not a byte copy): the git
+source-of-truth never leaks into Confluence. Core removes (before the content hash) the `## Sources`
+provenance section, `**Source:** raw/…` author fields, and repo-internal path references in
+prose/code/parentheticals (`raw/…`, `docs/architecture/…`, `c4/src/*.c4`, `.foam/…`, register files,
+`*.csv`); `CLAUDE.md` (the Layer-3 meta-doc) is excluded entirely. The wiki schema (rule 6 — Sources stays
+in the wiki) is unaffected. Two acceptance tiers: (i) repo-internal source paths MUST disappear;
+(ii) external/POC git URLs in ADRs (bitbucket.org/…, git.shakuro.com) are decision-evidence, kept by design.
+A strict anchored allowlist means C4 element ids and domain terms are never touched. **Structural/methodology labels stay English** — the QA-scenario
 6-part labels (Source/Stimulus/Artifact/Environment/Response/Measure), arc42 section markers and ADD field
 names / structural table headers are translated only in their VALUES, not the labels themselves; add a label
 to `integrations.confluence.preserveTerms` and Core masks every occurrence to a placeholder (a Core mask, not

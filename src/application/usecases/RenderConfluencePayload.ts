@@ -12,11 +12,13 @@ import {
   isPageExcluded,
   jiraBrowseUrl,
   neutralizeRepoRelativeLinks,
+  neutralizeRepoPaths,
   parentSourceOf,
   protectStructuralSpans,
   resolveCrossLinks,
   sortParentFirst,
   splitTitle,
+  stripSourceProvenanceLines,
   stripSourcesSection,
   stubLocalImages,
 } from '../../domain/services/ConfluenceTree';
@@ -192,9 +194,14 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const envelopes = new Map<string, PageEnvelope>();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
-    // The `## Sources` provenance section points at the git source-of-truth (raw/ paths) — strip it
-    // FIRST so it never reaches the mirror, the content hash or the RU mask (gt feedback v0.8.1).
-    const { body: curated, stripped: sourcesStripped } = stripSourcesSection(normalizeBody(parsed.content));
+    // Curate out the git source-of-truth BEFORE the content hash + RU mask, so the mirror never
+    // exposes repo internals (gt feedback v0.8.1/v0.8.2; affected pages drift once, re-publish clean):
+    //   1. the `## Sources` provenance section (v0.8.1),
+    //   2. `**Source:** raw/…` author fields (A),
+    //   3. repo paths in prose/code/parentheticals (B).
+    const { body: noSources, stripped: sourcesStripped } = stripSourcesSection(normalizeBody(parsed.content));
+    const { body: noFields, stripped: fieldsStripped } = stripSourceProvenanceLines(noSources);
+    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(noFields);
     const { body: resolved, crossLinks } = resolveCrossLinks(
       curated,
       graph,
@@ -261,6 +268,12 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     }
     if (sourcesStripped) {
       warnings.push('stripped the `## Sources` provenance section (git source-of-truth is not mirrored)');
+    }
+    if (fieldsStripped) {
+      warnings.push('stripped a `**Source:**` field citing the git source-of-truth');
+    }
+    if (pathsNeutralized) {
+      warnings.push('neutralized repo-internal path reference(s) — git source-of-truth is not mirrored');
     }
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {

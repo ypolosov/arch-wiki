@@ -12,9 +12,12 @@ import {
   neutralizeRepoRelativeLinks,
   parentSourceOf,
   protectStructuralSpans,
+  isRepoInternalPath,
+  neutralizeRepoPaths,
   resolveCrossLinks,
   sortParentFirst,
   splitTitle,
+  stripSourceProvenanceLines,
   stripSourcesSection,
   stubLocalImages,
   transformOutsideCode,
@@ -35,9 +38,10 @@ describe('ConfluenceTree.isPageExcluded', () => {
     expect(isPageExcluded(page('risks.md', { fm: { confluence: true } }), DEFAULT_EXCLUDE)).toBe(false);
   });
 
-  it('excludes register pages and proposed/rejected ADRs by default', () => {
+  it('excludes register pages, the CLAUDE meta-doc and proposed/rejected ADRs by default', () => {
     expect(isPageExcluded(page('risks.md'), DEFAULT_EXCLUDE)).toBe(true);
     expect(isPageExcluded(page('gap-analysis.md'), DEFAULT_EXCLUDE)).toBe(true);
+    expect(isPageExcluded(page('CLAUDE.md'), DEFAULT_EXCLUDE)).toBe(true); // v0.8.2 D: Layer-3 meta-doc
     expect(isPageExcluded(page('adrs/0001-x.md', { fm: { status: 'proposed' } }), DEFAULT_EXCLUDE)).toBe(true);
     expect(isPageExcluded(page('adrs/0002-y.md', { fm: { status: 'accepted' } }), DEFAULT_EXCLUDE)).toBe(false);
     expect(isPageExcluded(page('drivers/quality-attributes/QA-001-x.md'), DEFAULT_EXCLUDE)).toBe(false);
@@ -229,6 +233,120 @@ describe('ConfluenceTree.stripSourcesSection (v0.8.1 — no git source-of-truth 
   it('is a no-op when there is no Sources section', () => {
     const src = '# UC-014: Login\n\nNo provenance here.\n';
     expect(stripSourcesSection(src)).toEqual({ body: src, stripped: false });
+  });
+});
+
+describe('ConfluenceTree.isRepoInternalPath (v0.8.2 — strict anchored allowlist)', () => {
+  it('matches repo roots, *.c4/*.csv files and register/meta filenames', () => {
+    for (const p of [
+      'raw/TODO.md',
+      'raw/_synced/user-story-log/123-x.md',
+      '../raw/notes.md',
+      'docs/architecture/raw/TODO.md',
+      'c4/src/iam.c4',
+      '.foam/templates/concept.md',
+      'go-live-plan.csv',
+      'iam.c4',
+      'glossary.md',
+      'risks.md',
+      'gap-analysis.md',
+      'CLAUDE.md',
+    ]) {
+      expect(isRepoInternalPath(p)).toBe(true);
+    }
+  });
+
+  it('does NOT match C4 element ids, domain terms or arbitrary *.md (no false positives)', () => {
+    for (const t of [
+      'product.gaming.brand.core.service', // C4 element id (dotted, no /, not .c4/.csv)
+      'README.md', // not a register file
+      'design.md',
+      'sweepstakes', // domain term
+      'wager.balance', // dotted domain-ish term
+      'v1.2.3', // version
+      'e.g.', // prose
+      'foo/bar', // a path but not under a known repo root
+    ]) {
+      expect(isRepoInternalPath(t)).toBe(false);
+    }
+  });
+});
+
+describe('ConfluenceTree.stripSourceProvenanceLines (v0.8.2 A)', () => {
+  it('drops a **Source:** field whose value is a repo path', () => {
+    const r = stripSourceProvenanceLines('# CON-007\n\n**Source:** `raw/TODO.md`\n\n## Constraint\nText.\n');
+    expect(r.stripped).toBe(true);
+    expect(r.body).not.toContain('Source');
+    expect(r.body).not.toContain('raw/TODO.md');
+    expect(r.body).toContain('## Constraint');
+  });
+
+  it('drops a labelled **Source for …:** field citing a repo path', () => {
+    const r = stripSourceProvenanceLines('**Source for the maintainer role list:** docs/architecture/raw/owners.md\n');
+    expect(r.stripped).toBe(true);
+    expect(r.body.trim()).toBe('');
+  });
+
+  it('KEEPS the QA-scenario **Source:** field (value is an actor, not a path)', () => {
+    const src = '## Scenario\n- **Source:** an authenticated user\n- **Stimulus:** submits the form\n';
+    expect(stripSourceProvenanceLines(src)).toEqual({ body: src, stripped: false });
+  });
+
+  it('is fence-aware (a **Source:** raw/… inside a code block is left alone)', () => {
+    const src = '```md\n**Source:** raw/x.md\n```\n';
+    expect(stripSourceProvenanceLines(src).stripped).toBe(false);
+  });
+});
+
+describe('ConfluenceTree.neutralizeRepoPaths (v0.8.2 B)', () => {
+  it('drops a (from <repo-path>) provenance parenthetical, incl. in a heading', () => {
+    const r = neutralizeRepoPaths('## Go-live rebase (from raw/go-live-plan.csv)\n\n> Note (from raw/notes.md)\n');
+    expect(r.neutralized).toBe(true);
+    expect(r.body).toContain('## Go-live rebase');
+    expect(r.body).not.toContain('raw/go-live-plan.csv');
+    expect(r.body).not.toContain('raw/notes.md');
+    expect(r.body).not.toContain('(from');
+  });
+
+  it('drops an inline-code repo path and tidies the gap', () => {
+    const r = neutralizeRepoPaths('The model lives in `c4/src/iam.c4` for reference.');
+    expect(r.neutralized).toBe(true);
+    expect(r.body).not.toContain('c4/src/iam.c4');
+    expect(r.body).not.toContain('`'); // the code span is gone
+    expect(r.body).not.toMatch(/ {2,}/); // no doubled space left behind
+  });
+
+  it('drops a bare register filename in prose', () => {
+    const r = neutralizeRepoPaths('See glossary.md and risks.md for context.');
+    expect(r.body).not.toContain('glossary.md');
+    expect(r.body).not.toContain('risks.md');
+  });
+
+  it('does NOT touch a C4 element id or a fenced code sample (no false positives)', () => {
+    const src = 'Element `product.gaming.brand.core.service` is central.\n\n```\nsee raw/x.md\n```\n';
+    const r = neutralizeRepoPaths(src);
+    expect(r.neutralized).toBe(false);
+    expect(r.body).toBe(src); // both the C4 id and the fenced raw/ path survive verbatim
+  });
+
+  it('KEEPS bare external/POC git URLs (acceptance tier ii — even ending in .c4/.csv or with raw/ segments)', () => {
+    for (const src of [
+      'Evidence: https://bitbucket.org/gromtech1/pocs/src/main.c4 confirms it.',
+      'See https://git.shakuro.com/foo/bar.csv for the POC.',
+      'Ref https://example.com/raw/file.txt and https://example.com/docs/architecture/x here.',
+    ]) {
+      const r = neutralizeRepoPaths(src);
+      expect(r.body).toBe(src); // URL preserved verbatim
+      expect(r.neutralized).toBe(false);
+    }
+  });
+
+  it('drops ONLY the path in a prose-carrying aside, not the whole parenthetical (no over-deletion)', () => {
+    const r = neutralizeRepoPaths('The plan (see also raw/y.md and other notes) is ready.');
+    expect(r.body).not.toContain('raw/y.md');
+    expect(r.body).toContain('and other notes'); // human prose preserved
+    expect(r.body).toContain('The plan');
+    expect(r.body).toContain('is ready.');
   });
 });
 

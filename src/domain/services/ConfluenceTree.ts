@@ -12,13 +12,15 @@ import { WikiPage, kindOfPage } from '../model/WikiPage';
 export interface MirrorExclude {
   /** ADR statuses hidden from stakeholders (default: proposed/rejected). */
   statuses: string[];
-  /** Maintenance/register basenames hidden (default: risks/gap-analysis/kanban). */
+  /** Maintenance/register/meta basenames hidden (default: risks/gap-analysis/kanban + the CLAUDE meta-doc). */
   basenames: string[];
 }
 
 export const DEFAULT_EXCLUDE: MirrorExclude = {
   statuses: ['proposed', 'rejected'],
-  basenames: ['risks', 'gap-analysis', 'kanban'],
+  // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
+  // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
+  basenames: ['risks', 'gap-analysis', 'kanban', 'CLAUDE'],
 };
 
 export interface CrossLink {
@@ -275,6 +277,119 @@ export function stripSourcesSection(content: string): { body: string; stripped: 
   }
   // Collapse any trailing blank lines a trailing-Sources cut leaves behind (the caller re-normalises).
   return { body: out.join('\n').replace(/\n[ \t\n]*$/, '\n'), stripped };
+}
+
+// ── Repo-internal source provenance (v0.8.2) ────────────────────────────────────────────────
+// The mirror is a CURATED projection: beyond the `## Sources` section (v0.8.1), the git
+// source-of-truth must not leak ANYWHERE — inline `**Source:**` fields, repo paths in prose/code,
+// or register filenames. The matcher is a STRICT anchored allowlist to avoid false positives on C4
+// element ids (`product.gaming.brand.core.service`) and domain terms: ONLY a path under a known repo
+// root, a `*.c4`/`*.csv` file, or a known register/meta filename counts — never an arbitrary `*.md`
+// or a dotted identifier. External/POC git URLs (bitbucket.org/…, git.shakuro.com) are NOT matched —
+// they are decision-evidence in ADRs, kept by design (acceptance criterion tier ii).
+const REPO_PATH_SRC =
+  '(?:' +
+  '(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]+' + // a path under a known repo root
+  '|' +
+  '[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b' + // a *.c4 / *.csv file (repo-internal extensions)
+  '|' +
+  '(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b' + // a known register/meta file
+  ')';
+const REPO_PATH_RE = new RegExp(REPO_PATH_SRC, 'g'); // scan/replace
+const REPO_PATH_CONTAINS_RE = new RegExp(REPO_PATH_SRC); // stateless .test (no /g)
+const REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`); // whole-token test
+
+/**
+ * True if `token` (trimmed) is, on its own, a repo-internal source path / register file the curated
+ * mirror must not expose. Anchored: a C4 element id (`product.gaming.brand.core.service`), a plain
+ * `README.md`, or a domain term is NOT a match. Pure.
+ */
+export function isRepoInternalPath(token: string): boolean {
+  return REPO_PATH_ANCHORED_RE.test(token.trim());
+}
+
+// A `**Source…:**` author field (NOT the QA-scenario `- **Source:** <actor>` 6-part field — that
+// one carries a domain value, not a path; it is left alone by the repo-path-value condition below).
+const SOURCE_FIELD_RE = /^\s*[-*]?\s*\*\*Source[^*\n]*:\*\*(.*)$/i;
+
+/**
+ * Drop `**Source…:**` provenance field lines whose VALUE cites the git source-of-truth (a
+ * repo-internal path). Gating on the path VALUE (not the field label) keeps the QA-scenario
+ * `- **Source:** user clicks…` field untouched (no path → not a leak). Fence-aware. Pure.
+ */
+export function stripSourceProvenanceLines(content: string): { body: string; stripped: boolean } {
+  const lines = content.split('\n');
+  const out: string[] = [];
+  let inFence = false;
+  let stripped = false;
+  for (const line of lines) {
+    if (FENCE_LINE_RE.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (!inFence) {
+      const m = SOURCE_FIELD_RE.exec(line);
+      if (m && REPO_PATH_CONTAINS_RE.test(m[1]!)) {
+        stripped = true;
+        continue; // drop the whole field line — it points at git source-of-truth
+      }
+    }
+    out.push(line);
+  }
+  return { body: out.join('\n').replace(/\n[ \t\n]*$/, '\n'), stripped };
+}
+
+// B skips, verbatim: fenced code; markdown link/image URLs `](…)` (handled by
+// neutralizeRepoRelativeLinks / stubLocalImages — incl. the C4 stub `![..](../c4/x.png)`); AND bare
+// http(s) URLs — external/POC git URLs (bitbucket.org/…, git.shakuro.com) are decision-evidence kept
+// by design (acceptance tier ii), and a repo-ish tail like `…/src/x.c4` inside one must NOT be eaten.
+// B targets INLINE code + prose, so (unlike transformOutsideCode) it does NOT skip inline-code spans.
+const B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
+// Provenance parenthetical that is PURELY a repo-path citation: `(from raw/…)`, `(see c4/src/x.c4)`,
+// `(source: …)`. Anchored to keyword + the repo path + close-paren so an aside carrying real prose
+// (`(see also raw/y.md and other notes)`) is NOT wiped wholesale — step-3 strips just the path there.
+const PROVENANCE_PAREN_RE = new RegExp(`[ \\t]*\\((?:from|see|source):?\\s+${REPO_PATH_SRC}[ \\t]*\\)`, 'gi');
+const INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
+
+/**
+ * Neutralise repo-internal path references that survive outside the `## Sources` section / `**Source:**`
+ * fields (v0.8.2 B): provenance parentheticals (`(from raw/…)`), inline-code repo paths (`` `c4/src/x.c4` ``),
+ * and bare register/`.c4`/`.csv` tokens in prose/tables/headings. Skips fenced code (verbatim samples) AND
+ * markdown link/image URLs (handled elsewhere — incl. the C4-diagram stub). Strict anchored allowlist → a
+ * C4 id / domain term is never touched. Drops the reference and tidies the gap (doubled spaces,
+ * space-before-punctuation, emptied parens). Pure; returns body + touched.
+ */
+export function neutralizeRepoPaths(content: string): { body: string; neutralized: boolean } {
+  let neutralized = false;
+  const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
+    let s = chunk;
+    s = s.replace(PROVENANCE_PAREN_RE, () => {
+      neutralized = true; // the pattern already requires a repo-path citation
+      return '';
+    });
+    s = s.replace(INLINE_CODE_SPAN_RE, (m) => {
+      if (isRepoInternalPath(m.slice(1, -1))) {
+        neutralized = true;
+        return '';
+      }
+      return m;
+    });
+    s = s.replace(REPO_PATH_RE, () => {
+      neutralized = true;
+      return '';
+    });
+    // Only tidy a chunk that actually lost content — a clean chunk stays BYTE-IDENTICAL (so a page
+    // with no git paths never drifts), and a boundary space adjacent to a skipped URL/code span is
+    // preserved (no trailing-strip, which would eat it). Collapse doubled spaces + space-before-punct
+    // left by a drop.
+    if (s === chunk) return chunk;
+    return s
+      .replace(/\(\s*\)/g, '')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+([.,;:!?)])/g, '$1');
+  });
+  return { body, neutralized };
 }
 
 /**

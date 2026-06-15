@@ -215,6 +215,23 @@ async function loadProjectConfig(opts: GlobalOpts): Promise<ProjectConfig> {
   return ProjectConfig.from(await store.read());
 }
 
+/**
+ * cwd-trap guard for commands that READ an existing wiki (NOT greenfield scaffolders): running from
+ * INSIDE docs/architecture re-appends the default --root (→ docs/architecture/docs/architecture),
+ * which silently reads nothing and surfaces as a confusing downstream error (e.g. "no
+ * [integrations.confluence.space]"). Fail fast with an actionable hint when the wiki root is absent.
+ */
+async function assertWikiRootExists(opts: GlobalOpts): Promise<void> {
+  const root = wikiRoot(opts);
+  if (!(await new NodeFileSystem().exists(root))) {
+    throw new DomainError(
+      `wiki root "${root}" does not exist — run from the repo root, or pass --cwd <repo> / --root <dir>. ` +
+        'If you are inside docs/architecture, cd up to the repo root (the default --root re-appends docs/architecture).',
+      1,
+    );
+  }
+}
+
 function emit(env: Envelope): void {
   process.stdout.write(`${JSON.stringify(env)}\n`);
 }
@@ -552,6 +569,7 @@ async function main(): Promise<void> {
     .option('--page <path>', 'restrict the emitted plan to a single wiki source path (testing/incremental)')
     .action(async (opts: GlobalOpts & Record<string, unknown>) => {
       try {
+        await assertWikiRootExists(opts); // clear cwd-trap error instead of a confusing "no space"
         const fs = new NodeFileSystem();
         const root = wikiRoot(opts);
         const plan = await renderConfluencePayload({
