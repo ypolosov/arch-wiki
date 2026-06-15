@@ -165,8 +165,10 @@ export function splitTitle(title: string): { prefix: string; label: string } {
 // in-Confluence root-relative (/wiki/…), or a pure #anchor. Anything else is a
 // repo-relative path that 404s in Confluence.
 const KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
-// Non-image markdown link: not preceded by `!`.
-const MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
+// Non-image markdown link: not preceded by `!`. The label group is `*` (allows EMPTY, v0.8.3
+// safety net): a repo-relative link with an empty label `[](../c4/x.c4)` — which a prior B pass
+// could theoretically leave — is then dropped whole instead of surviving as a dead empty link.
+const MD_LINK_RE = /(?<!!)\[([^\]]*)\]\(([^)\s]+)\)/g;
 
 // Code spans kept verbatim by the mirror: tilde fences (~~~…~~~), ``` fences, ``double`` and
 // `single` inline code. CommonMark uses multi-backtick spans to wrap content containing a literal
@@ -287,16 +289,22 @@ export function stripSourcesSection(content: string): { body: string; stripped: 
 // root, a `*.c4`/`*.csv` file, or a known register/meta filename counts — never an arbitrary `*.md`
 // or a dotted identifier. External/POC git URLs (bitbucket.org/…, git.shakuro.com) are NOT matched —
 // they are decision-evidence in ADRs, kept by design (acceptance criterion tier ii).
+// The repo-root alternative trails `[\w./-]*` (NOT `+`, v0.8.3): a bare root `c4/` / `raw/` /
+// `.foam/` / `docs/architecture/` (no path tail — e.g. the "Three layers" repo-structure table in
+// index.md) is itself a leak and must match too.
 const REPO_PATH_SRC =
   '(?:' +
-  '(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]+' + // a path under a known repo root
+  '(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]*' + // a path under (or the bare) repo root
   '|' +
   '[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b' + // a *.c4 / *.csv file (repo-internal extensions)
   '|' +
   '(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b' + // a known register/meta file
   ')';
-const REPO_PATH_RE = new RegExp(REPO_PATH_SRC, 'g'); // scan/replace
-const REPO_PATH_CONTAINS_RE = new RegExp(REPO_PATH_SRC); // stateless .test (no /g)
+// A left word-boundary lookbehind keeps the scan from matching a repo root buried inside a larger
+// token (`draw/x` must NOT match `raw/x`; `scc4/y` must NOT match `c4/y`) — v0.8.3. The anchored test
+// needs no lookbehind (`^` bounds it); the paren/connective patterns are bounded by their keyword + `\s`.
+const REPO_PATH_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`, 'g'); // scan/replace
+const REPO_PATH_CONTAINS_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`); // stateless .test (no /g)
 const REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`); // whole-token test
 
 /**
@@ -310,12 +318,17 @@ export function isRepoInternalPath(token: string): boolean {
 
 // A `**Source…:**` author field (NOT the QA-scenario `- **Source:** <actor>` 6-part field — that
 // one carries a domain value, not a path; it is left alone by the repo-path-value condition below).
-const SOURCE_FIELD_RE = /^\s*[-*]?\s*\*\*Source[^*\n]*:\*\*(.*)$/i;
+// Group 1 = the field LABEL (incl. list marker), group 2 = the VALUE — split so a value carrying a
+// non-git remainder (Jira key, expert attribution) survives the path cut (v0.8.3 minor).
+const SOURCE_FIELD_RE = /^(\s*[-*]?\s*\*\*Source[^*\n]*:\*\*)(.*)$/i;
 
 /**
- * Drop `**Source…:**` provenance field lines whose VALUE cites the git source-of-truth (a
+ * Curate `**Source…:**` provenance field lines whose VALUE cites the git source-of-truth (a
  * repo-internal path). Gating on the path VALUE (not the field label) keeps the QA-scenario
- * `- **Source:** user clicks…` field untouched (no path → not a leak). Fence-aware. Pure.
+ * `- **Source:** user clicks…` field untouched (no path → not a leak). Cuts only the git path from the
+ * value, KEEPING any non-git remainder (`- **Source:** GRM-3705 — sweepstakes strategy (raw/x.md)` →
+ * `- **Source:** GRM-3705 — sweepstakes strategy`, gt feedback v0.8.3 minor); drops the whole line only
+ * when nothing but the path was there. Fence-aware. Pure.
  */
 export function stripSourceProvenanceLines(content: string): { body: string; stripped: boolean } {
   const lines = content.split('\n');
@@ -330,9 +343,14 @@ export function stripSourceProvenanceLines(content: string): { body: string; str
     }
     if (!inFence) {
       const m = SOURCE_FIELD_RE.exec(line);
-      if (m && REPO_PATH_CONTAINS_RE.test(m[1]!)) {
+      if (m && REPO_PATH_CONTAINS_RE.test(m[2]!)) {
         stripped = true;
-        continue; // drop the whole field line — it points at git source-of-truth
+        const { body: cleanedValue } = neutralizeRepoPaths(m[2]!);
+        // Drop the whole line only if the value was nothing but the path; otherwise keep the label +
+        // the neutralised remainder (trailing whitespace from the cut trimmed off).
+        if (!/[A-Za-z0-9]/.test(cleanedValue)) continue;
+        out.push((m[1]! + cleanedValue).replace(/[ \t]+$/, ''));
+        continue;
       }
     }
     out.push(line);
@@ -347,27 +365,60 @@ export function stripSourceProvenanceLines(content: string): { body: string; str
 // B targets INLINE code + prose, so (unlike transformOutsideCode) it does NOT skip inline-code spans.
 const B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
 // Provenance parenthetical that is PURELY a repo-path citation: `(from raw/…)`, `(see c4/src/x.c4)`,
-// `(source: …)`. Anchored to keyword + the repo path + close-paren so an aside carrying real prose
-// (`(see also raw/y.md and other notes)`) is NOT wiped wholesale — step-3 strips just the path there.
-const PROVENANCE_PAREN_RE = new RegExp(`[ \\t]*\\((?:from|see|source):?\\s+${REPO_PATH_SRC}[ \\t]*\\)`, 'gi');
+// `(source: `risks.md`)`. Anchored to keyword + the repo path + close-paren so an aside carrying real
+// prose (`(see also raw/y.md and other notes)`) is NOT wiped wholesale — step-4 strips just the path
+// there. The path may be wrapped in inline-code backticks (`(from `raw/x.md`)`) — the optional `` `? ``
+// around the path makes the whole parenthetical match so it is removed cleanly, instead of leaving a
+// dangling `(from):` after only the backticked span was cut (gt feedback v0.8.3 Defect 2).
+// Horizontal whitespace only (`[ \t]+`, NOT `\s+`): a provenance citation sits on one line, and `\s`
+// would let the match span a `\n` and swallow following lines/blank lines (review v0.8.3).
+const PROVENANCE_PAREN_RE = new RegExp(
+  '[ \\t]*\\((?:from|see|source):?[ \\t]+`?' + REPO_PATH_SRC + '`?[ \\t]*\\)',
+  'gi',
+);
+// A connective preposition/verb that introduces a repo-path citation in prose ("tracked in `risks.md`",
+// "see raw/x.md", "defined in c4/src/x.c4"). Dropping the connective TOGETHER with the path avoids a
+// dangling preposition before the punctuation (`risk tracked in.` — gt feedback v0.8.3 Defect 2). Each
+// only fires when IMMEDIATELY followed by a repo-path match (the strict allowlist gates it), so ordinary
+// prose is never touched: the only word ever removed is one that introduces a leak we already remove.
+const CONNECTIVE =
+  '(?:in|into|on|onto|at|to|of|for|from|via|per|under|within|with|by|see)';
+// Horizontal whitespace only (`[ \t]+`, NOT `\s+`): the connective + path sit on ONE line. `\s` would
+// span a `\n` and merge a connective ending one line/heading with a path opening the next, collapsing
+// the lines and deleting the blank line between them (review v0.8.3). A line-wrapped citation is rare
+// and degrades gracefully (the path is still removed by step 3/4; only the connective stays).
+const CONNECTIVE_PATH_RE = new RegExp('\\b' + CONNECTIVE + '[ \\t]+`?' + REPO_PATH_SRC + '`?', 'gi');
+// A provenance parenthetical emptied to just its keyword — collapsed in the tidy pass (belt-and-
+// suspenders for the rare case the path was not adjacent to the close-paren so PROVENANCE_PAREN_RE missed).
+const EMPTY_PROVENANCE_PAREN_RE = /\((?:from|see|source):?[ \t]*\)/gi;
 const INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
 
 /**
  * Neutralise repo-internal path references that survive outside the `## Sources` section / `**Source:**`
- * fields (v0.8.2 B): provenance parentheticals (`(from raw/…)`), inline-code repo paths (`` `c4/src/x.c4` ``),
- * and bare register/`.c4`/`.csv` tokens in prose/tables/headings. Skips fenced code (verbatim samples) AND
- * markdown link/image URLs (handled elsewhere — incl. the C4-diagram stub). Strict anchored allowlist → a
- * C4 id / domain term is never touched. Drops the reference and tidies the gap (doubled spaces,
- * space-before-punctuation, emptied parens). Pure; returns body + touched.
+ * fields (v0.8.2 B): provenance parentheticals (`(from raw/…)`), connective-introduced citations
+ * (`tracked in `risks.md``), inline-code repo paths (`` `c4/src/x.c4` ``), and bare register/`.c4`/`.csv`
+ * tokens / bare repo roots in prose/tables/headings. Skips fenced code (verbatim samples) AND markdown
+ * link/image URLs (handled elsewhere — incl. the C4-diagram stub). Strict anchored allowlist → a C4 id /
+ * domain term is never touched. Drops the reference (with the connective, if any, so no preposition is left
+ * dangling) and tidies the gap (emptied parens, doubled spaces, space-before-punctuation). Pure; returns
+ * body + touched.
  */
 export function neutralizeRepoPaths(content: string): { body: string; neutralized: boolean } {
   let neutralized = false;
   const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
     let s = chunk;
+    // 1. A parenthetical that is purely a repo-path citation (`(from raw/…)`, `(see `c4/x.c4`)`).
     s = s.replace(PROVENANCE_PAREN_RE, () => {
       neutralized = true; // the pattern already requires a repo-path citation
       return '';
     });
+    // 2. A connective introducing a repo path (`tracked in `risks.md``, `from raw/x.md`): drop connective
+    //    + path together so no dangling preposition is left before the punctuation (v0.8.3 Defect 2).
+    s = s.replace(CONNECTIVE_PATH_RE, () => {
+      neutralized = true;
+      return '';
+    });
+    // 3. A standalone inline-code repo path (`` `c4/src/x.c4` ``).
     s = s.replace(INLINE_CODE_SPAN_RE, (m) => {
       if (isRepoInternalPath(m.slice(1, -1))) {
         neutralized = true;
@@ -375,19 +426,25 @@ export function neutralizeRepoPaths(content: string): { body: string; neutralize
       }
       return m;
     });
+    // 4. A bare (non-code) repo path / register file / bare repo root in prose, tables, headings.
     s = s.replace(REPO_PATH_RE, () => {
       neutralized = true;
       return '';
     });
     // Only tidy a chunk that actually lost content — a clean chunk stays BYTE-IDENTICAL (so a page
     // with no git paths never drifts), and a boundary space adjacent to a skipped URL/code span is
-    // preserved (no trailing-strip, which would eat it). Collapse doubled spaces + space-before-punct
-    // left by a drop.
+    // preserved (no trailing-strip, which would eat it). Collapse an emptied provenance paren / empty
+    // parens, doubled spaces, and a space stranded before punctuation by a drop.
     if (s === chunk) return chunk;
     return s
+      .replace(EMPTY_PROVENANCE_PAREN_RE, '')
       .replace(/\(\s*\)/g, '')
       .replace(/[ \t]{2,}/g, ' ')
-      .replace(/[ \t]+([.,;:!?)])/g, '$1');
+      .replace(/[ \t]+([.,;:!?)])/g, '$1')
+      // Trailing whitespace a drop stranded before a newline (the body was per-line trimmed by
+      // normalizeBody upstream, so this only ever touches removal-introduced space — never a boundary
+      // space before a skipped URL/code span, which sits mid-line with no newline). v0.8.3.
+      .replace(/[ \t]+\n/g, '\n');
   });
   return { body, neutralized };
 }

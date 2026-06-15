@@ -329,6 +329,44 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(qa1.warnings.some((w) => w.includes('repo-internal path'))).toBe(true);
   });
 
+  it('v0.8.3: a repo-relative link whose label IS the path leaves no broken empty link or leaked URL', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    // The exact gt 0.8.2 regression: B ran before the link neutraliser, stripped the path from the
+    // LABEL → `[](../c4/src/model.c4)`, and the dead URL survived. With B reordered after the link
+    // neutraliser the whole reference is removed cleanly.
+    await sys.writeFile(
+      path.join(root, 'arc42/05-building-blocks.md'),
+      '# Building Blocks\n\n- Model: [c4/src/model.c4](../c4/src/model.c4)\n- Risks tracked in `risks.md`.\n- Note (from `raw/go-live-plan.csv`): pending.\n',
+    );
+    const plan = await renderConfluencePayload(deps(root));
+    const bb = plan.pages.find((p) => p.basename === '05-building-blocks')!;
+    expect(bb.body).not.toContain('c4/src/model.c4'); // path gone from label AND url
+    expect(bb.body).not.toContain('../c4/'); // no dead repo-relative href survives
+    expect(bb.body).not.toMatch(/\[\]\(/); // no broken empty link
+    expect(bb.body).toContain('- Model:'); // the list item survives, just without the path
+    // Defect 2: prose stays clean — no dangling preposition-before-period, no `(from):`
+    expect(bb.body).toContain('Risks tracked.');
+    expect(bb.body).not.toMatch(/tracked in\.?$/m);
+    expect(bb.body).not.toContain('(from');
+    expect(bb.body).toContain('Note: pending.');
+  });
+
+  it('v0.8.3: a **Source:** field keeps its non-git remainder (Jira ref + attribution), cutting only the path', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'concepts/sweepstakes.md'),
+      '# Sweepstakes\n\n- **Source:** GRM-3705 — sweepstakes strategy (raw/sweepstakes.md)\n\nBody.\n',
+    );
+    const plan = await renderConfluencePayload(deps(root));
+    const c = plan.pages.find((p) => p.basename === 'sweepstakes')!;
+    expect(c.body).toContain('GRM-3705'); // Jira ref preserved
+    expect(c.body).toContain('sweepstakes strategy'); // attribution preserved
+    expect(c.body).not.toContain('raw/sweepstakes.md'); // only the git path is cut
+    expect(c.warnings.some((w) => w.includes('**Source:**'))).toBe(true);
+  });
+
   it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();

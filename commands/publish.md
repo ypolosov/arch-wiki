@@ -30,15 +30,24 @@ across passes — pass 2 changes only the restore value, so you do **not** re-tr
 Note: repo-relative links (`../iterations/`, `CLAUDE.md`, `c4/…`) are **not** wiki cross-links and are
 neutralized to plain text by Core (they would be dead hrefs in Confluence); `data.pages[].warnings` lists them.
 The mirror is a **curated projection**, not a byte copy — the git source-of-truth never reaches Confluence.
-Core removes, before the content hash: the `## Sources` provenance section; `**Source:** raw/…` author fields;
-and repo-internal path references in prose/code/parentheticals (`raw/…`, `docs/architecture/…`, `c4/src/*.c4`,
-`.foam/…`, register files like `risks.md`/`glossary.md`, `*.csv`). The `CLAUDE.md` Layer-3 meta-doc is excluded
-entirely. `data.pages[].warnings` lists each curation. **Acceptance has two tiers:** (i) repo-internal source
-paths MUST be absent; (ii) external/POC git URLs in ADRs (`bitbucket.org/…`, `git.shakuro.com`) are
-decision-evidence and are **kept by design** — they are not KB provenance. The path matcher is a strict anchored
-allowlist, so C4 element ids (`product.gaming.brand.core.service`) and domain terms are never touched.
-A filename/domain-like neutralized label (`CLAUDE.md`) is wrapped in inline code so Confluence does not
-auto-link it to a dead `http://CLAUDE.md`.
+Core removes, before the content hash: the `## Sources` provenance section; the repo-path part of `**Source:**`
+author fields (keeping any non-git remainder — a Jira ref / attribution — and dropping the line only when
+nothing else is left); and repo-internal path references in prose/code/parentheticals (`raw/…`,
+`docs/architecture/…`, `c4/src/*.c4`, `.foam/…`, bare repo roots `c4/`/`raw/`, register files like
+`risks.md`/`glossary.md`, `*.csv`). A provenance parenthetical (`(from raw/…)`) and a connective that
+introduces a path (`tracked in \`risks.md\``) are removed *with* their keyword/preposition so no dangling
+`(from):` or `… in.` is left behind. The `CLAUDE.md` Layer-3 meta-doc is excluded entirely.
+`data.pages[].warnings` lists each curation. The curation runs in pipeline order **after** cross-link
+resolution + repo-relative-link neutralisation (so a link whose label is itself a path, `[c4/src/x.c4](…)`,
+is removed whole — no broken empty link) and **before** the C4-image stub (so the stub keeps its diagram
+`source` path). **Acceptance has two tiers:** (i) repo-internal source paths MUST be absent; (ii) external/POC
+git URLs in ADRs (`bitbucket.org/…`, `git.shakuro.com`) are decision-evidence and are **kept by design** —
+they are not KB provenance. The path matcher is a strict anchored allowlist with a left word-boundary, so C4
+element ids (`product.gaming.brand.core.service`), domain terms and words merely containing a root (`draw/`)
+are never touched. A filename/domain-like neutralized label (`CLAUDE.md`) is wrapped in inline code so
+Confluence does not auto-link it to a dead `http://CLAUDE.md`. (A bare repo root that was the sole content of
+a table cell or list bullet leaves that cell/bullet empty — valid but blank; the repo-structure table in
+`index.md` is the typical case.)
 
 **Incremental publish:** `render-confluence --page <relPath>` emits the target page **plus its full ancestor
 chain** (parent-first), so you can publish one branch and still create parents before children — the mirror

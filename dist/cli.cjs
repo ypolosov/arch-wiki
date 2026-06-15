@@ -9409,7 +9409,7 @@ function splitTitle(title) {
   return { prefix: "", label: title.trim() };
 }
 var KEEP_LINK_URL = /^(?:https?:|mailto:|#|\/wiki\/)/;
-var MD_LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g;
+var MD_LINK_RE = /(?<!!)\[([^\]]*)\]\(([^)\s]+)\)/g;
 var CODE_SPAN_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|``[\s\S]*?``|`[^`\n]*`/g;
 function transformOutsidePattern(content, pattern, fn) {
   let out = "";
@@ -9476,14 +9476,14 @@ function stripSourcesSection(content) {
   }
   return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
 }
-var REPO_PATH_SRC = "(?:(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]+|[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b|(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b)";
-var REPO_PATH_RE = new RegExp(REPO_PATH_SRC, "g");
-var REPO_PATH_CONTAINS_RE = new RegExp(REPO_PATH_SRC);
+var REPO_PATH_SRC = "(?:(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]*|[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b|(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b)";
+var REPO_PATH_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`, "g");
+var REPO_PATH_CONTAINS_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`);
 var REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`);
 function isRepoInternalPath(token) {
   return REPO_PATH_ANCHORED_RE.test(token.trim());
 }
-var SOURCE_FIELD_RE = /^\s*[-*]?\s*\*\*Source[^*\n]*:\*\*(.*)$/i;
+var SOURCE_FIELD_RE = /^(\s*[-*]?\s*\*\*Source[^*\n]*:\*\*)(.*)$/i;
 function stripSourceProvenanceLines(content) {
   const lines = content.split("\n");
   const out = [];
@@ -9497,8 +9497,11 @@ function stripSourceProvenanceLines(content) {
     }
     if (!inFence) {
       const m = SOURCE_FIELD_RE.exec(line);
-      if (m && REPO_PATH_CONTAINS_RE.test(m[1])) {
+      if (m && REPO_PATH_CONTAINS_RE.test(m[2])) {
         stripped = true;
+        const { body: cleanedValue } = neutralizeRepoPaths(m[2]);
+        if (!/[A-Za-z0-9]/.test(cleanedValue)) continue;
+        out.push((m[1] + cleanedValue).replace(/[ \t]+$/, ""));
         continue;
       }
     }
@@ -9507,13 +9510,23 @@ function stripSourceProvenanceLines(content) {
   return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
 }
 var B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
-var PROVENANCE_PAREN_RE = new RegExp(`[ \\t]*\\((?:from|see|source):?\\s+${REPO_PATH_SRC}[ \\t]*\\)`, "gi");
+var PROVENANCE_PAREN_RE = new RegExp(
+  "[ \\t]*\\((?:from|see|source):?[ \\t]+`?" + REPO_PATH_SRC + "`?[ \\t]*\\)",
+  "gi"
+);
+var CONNECTIVE = "(?:in|into|on|onto|at|to|of|for|from|via|per|under|within|with|by|see)";
+var CONNECTIVE_PATH_RE = new RegExp("\\b" + CONNECTIVE + "[ \\t]+`?" + REPO_PATH_SRC + "`?", "gi");
+var EMPTY_PROVENANCE_PAREN_RE = /\((?:from|see|source):?[ \t]*\)/gi;
 var INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
 function neutralizeRepoPaths(content) {
   let neutralized = false;
   const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
     let s = chunk;
     s = s.replace(PROVENANCE_PAREN_RE, () => {
+      neutralized = true;
+      return "";
+    });
+    s = s.replace(CONNECTIVE_PATH_RE, () => {
       neutralized = true;
       return "";
     });
@@ -9529,7 +9542,7 @@ function neutralizeRepoPaths(content) {
       return "";
     });
     if (s === chunk) return chunk;
-    return s.replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1");
+    return s.replace(EMPTY_PROVENANCE_PAREN_RE, "").replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1").replace(/[ \t]+\n/g, "\n");
   });
   return { body, neutralized };
 }
@@ -9972,9 +9985,8 @@ async function renderConfluencePayload(deps) {
     const parsed = await deps.repo.readParsed(p.relPath);
     const { body: noSources, stripped: sourcesStripped } = stripSourcesSection(normalizeBody2(parsed.content));
     const { body: noFields, stripped: fieldsStripped } = stripSourceProvenanceLines(noSources);
-    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(noFields);
     const { body: resolved, crossLinks } = resolveCrossLinks(
-      curated,
+      noFields,
       graph,
       publishedMap,
       includedSources,
@@ -9984,8 +9996,9 @@ async function renderConfluencePayload(deps) {
       // translatable body is stable across the 2-pass publish (no re-translation on pass 2).
       language != null
     );
-    const { body: neutralized, stripped } = neutralizeRepoRelativeLinks(resolved);
-    const { body: stubbedBody, stubbed } = stubLocalImages(neutralized);
+    const { body: linkClean, stripped } = neutralizeRepoRelativeLinks(resolved);
+    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(linkClean);
+    const { body: stubbedBody, stubbed } = stubLocalImages(curated);
     const realizedKeys = Array.isArray(parsed.frontmatter.realized_by) ? parsed.frontmatter.realized_by.map(String) : [];
     const realizedBy = realizedKeys.map((key) => {
       const sys = issueSystem.get(key);
@@ -10905,7 +10918,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.2";
+var PLUGIN_VERSION = "0.8.3";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

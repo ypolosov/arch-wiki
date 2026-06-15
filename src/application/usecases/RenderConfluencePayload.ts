@@ -201,9 +201,8 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     //   3. repo paths in prose/code/parentheticals (B).
     const { body: noSources, stripped: sourcesStripped } = stripSourcesSection(normalizeBody(parsed.content));
     const { body: noFields, stripped: fieldsStripped } = stripSourceProvenanceLines(noSources);
-    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(noFields);
     const { body: resolved, crossLinks } = resolveCrossLinks(
-      curated,
+      noFields,
       graph,
       publishedMap,
       includedSources,
@@ -213,9 +212,17 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       language != null,
     );
     // Repo-relative md links (../iterations/, CLAUDE.md …) are dead hrefs in Confluence → plain text.
-    const { body: neutralized, stripped } = neutralizeRepoRelativeLinks(resolved);
+    // MUST run BEFORE neutralizeRepoPaths (v0.8.3 Defect 1): otherwise B strips the repo path out of a
+    // link LABEL (`[c4/src/x.c4](../c4/src/x.c4)` → `[](…)`), the now-empty label no longer matches
+    // MD_LINK_RE, and the path SURVIVES in the dead URL (11 broken links across 6 pages on gt). Running
+    // the link neutraliser first collapses the link to an inline-code label, which B then removes clean.
+    const { body: linkClean, stripped } = neutralizeRepoRelativeLinks(resolved);
+    // Curate out repo-internal paths in prose/code/parentheticals (B). Runs AFTER the link neutraliser
+    // (sees collapsed inline-code labels, not raw link syntax) and BEFORE stubLocalImages (so B does not
+    // eat the C4-diagram stub's `src`, which is kept by design).
+    const { body: curated, neutralized: pathsNeutralized } = neutralizeRepoPaths(linkClean);
     // Local image embeds (C4 diagrams) → deterministic placeholder (MCP has no attachment upload).
-    const { body: stubbedBody, stubbed } = stubLocalImages(neutralized);
+    const { body: stubbedBody, stubbed } = stubLocalImages(curated);
 
     // Reverse trace edge: the Jira issues that realize this artifact (`realized_by` frontmatter,
     // written by record-issue). Append a Core-rendered line so the mirror page links back to its

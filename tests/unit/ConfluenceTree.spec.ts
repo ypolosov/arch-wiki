@@ -251,6 +251,10 @@ describe('ConfluenceTree.isRepoInternalPath (v0.8.2 — strict anchored allowlis
       'risks.md',
       'gap-analysis.md',
       'CLAUDE.md',
+      'c4/', // bare repo root (no path tail) — itself a leak (v0.8.3)
+      'raw/',
+      '.foam/',
+      'docs/architecture/',
     ]) {
       expect(isRepoInternalPath(p)).toBe(true);
     }
@@ -266,6 +270,9 @@ describe('ConfluenceTree.isRepoInternalPath (v0.8.2 — strict anchored allowlis
       'v1.2.3', // version
       'e.g.', // prose
       'foo/bar', // a path but not under a known repo root
+      'raw', // a bare word without the slash is NOT a root (v0.8.3 — `raw events`, not `raw/`)
+      'c4',
+      'draw/sketch', // a root buried in a larger token must not match (anchored)
     ]) {
       expect(isRepoInternalPath(t)).toBe(false);
     }
@@ -295,6 +302,17 @@ describe('ConfluenceTree.stripSourceProvenanceLines (v0.8.2 A)', () => {
   it('is fence-aware (a **Source:** raw/… inside a code block is left alone)', () => {
     const src = '```md\n**Source:** raw/x.md\n```\n';
     expect(stripSourceProvenanceLines(src).stripped).toBe(false);
+  });
+
+  it('KEEPS the non-git remainder of the value, cutting only the path (v0.8.3 Minor 1)', () => {
+    const r = stripSourceProvenanceLines('- **Source:** GRM-3705 — sweepstakes strategy (raw/sweepstakes.md)\n');
+    expect(r.stripped).toBe(true);
+    expect(r.body).toContain('GRM-3705'); // Jira ref preserved
+    expect(r.body).toContain('sweepstakes strategy'); // expert attribution preserved
+    expect(r.body).toContain('**Source:**'); // the field label survives
+    expect(r.body).not.toContain('raw/sweepstakes.md'); // only the git path is cut
+    expect(r.body).not.toContain('(raw'); // and the now-empty parenthetical is tidied away
+    expect(r.body.trimEnd()).toBe('- **Source:** GRM-3705 — sweepstakes strategy');
   });
 });
 
@@ -347,6 +365,80 @@ describe('ConfluenceTree.neutralizeRepoPaths (v0.8.2 B)', () => {
     expect(r.body).toContain('and other notes'); // human prose preserved
     expect(r.body).toContain('The plan');
     expect(r.body).toContain('is ready.');
+  });
+
+  // ── v0.8.3 Defect 2: backtick-aware provenance paren + connective-absorb (no dangling prose) ──
+  it('removes a backticked provenance parenthetical whole — no dangling (from): (v0.8.3 Defect 2a)', () => {
+    const r = neutralizeRepoPaths('Note (from `raw/release-management-and-deployment.md`): see below.');
+    expect(r.neutralized).toBe(true);
+    expect(r.body).not.toContain('raw/release-management-and-deployment.md');
+    expect(r.body).not.toContain('(from'); // the whole `(from `…`)` is gone, not just the backticked span
+    expect(r.body).toBe('Note: see below.');
+  });
+
+  it('drops the connective WITH the path so no preposition is left before the period (v0.8.3 Defect 2b)', () => {
+    expect(neutralizeRepoPaths('Risk tracked in `risks.md`.').body).toBe('Risk tracked.');
+    expect(neutralizeRepoPaths('Go-live readiness in `raw/go-live-plan.csv`.').body).toBe('Go-live readiness.');
+    expect(neutralizeRepoPaths('Defined in c4/src/iam.c4 for clarity.').body).toBe('Defined for clarity.');
+  });
+
+  it('does NOT let a connective swallow a newline (no line/paragraph/heading merge) (v0.8.3 review)', () => {
+    // `\s` would span `\n`; `[ \t]+` keeps the match on one line. The path is still removed (step 3/4),
+    // structure is preserved (no merged lines, no deleted blank line, no paragraph pulled into a heading).
+    const src = 'The model is defined in\n`c4/src/x.c4` and used widely.\n\nNext paragraph.';
+    const wrapped = neutralizeRepoPaths(src);
+    expect(wrapped.body).not.toContain('c4/src/x.c4'); // path gone
+    expect(wrapped.body).toContain('\n\nNext paragraph.'); // blank line + next paragraph intact
+    expect((wrapped.body.match(/\n/g) ?? []).length).toBe((src.match(/\n/g) ?? []).length); // no newline eaten
+    expect(wrapped.body).toMatch(/defined in\n/); // first line not merged with the second
+
+    const heading = neutralizeRepoPaths('## Defined in\n\nraw/x.md is the source.');
+    expect(heading.body).toContain('## Defined in\n'); // heading not pulled into the next paragraph
+    expect(heading.body).not.toContain('raw/x.md');
+  });
+
+  it('leaves no dangling preposition-before-punctuation on any connective form (v0.8.3 acceptance sanity)', () => {
+    for (const src of [
+      'See the design from `raw/notes.md`, then proceed.',
+      'Constraints under `c4/src/x.c4`; review them.',
+      'The flow from raw/x.md to the wallet.',
+    ]) {
+      const body = neutralizeRepoPaths(src).body;
+      expect(body).not.toMatch(/\b(?:in|into|on|onto|at|to|of|for|from|via|per|under|within|with|by|see)\b[ \t]*[.,;:]/);
+    }
+  });
+
+  // ── v0.8.3 Minor 2: a bare repo root (no path tail) is itself a leak and must match ──
+  it('neutralises a bare repo root (c4/ , raw/) but NOT a root buried in a larger token (v0.8.3 Minor 2)', () => {
+    const r = neutralizeRepoPaths('Layers: c4/ and raw/ hold the model.');
+    expect(r.neutralized).toBe(true);
+    expect(r.body).not.toMatch(/\bc4\//);
+    expect(r.body).not.toMatch(/\braw\//);
+
+    const drawn = neutralizeRepoPaths('We draw/sketch ideas and crawl/ over them.');
+    expect(drawn.neutralized).toBe(false); // `draw/` / `crawl/` are NOT repo roots (left boundary)
+    expect(drawn.body).toBe('We draw/sketch ideas and crawl/ over them.');
+  });
+});
+
+describe('ConfluenceTree.neutralizeRepoRelativeLinks + neutralizeRepoPaths (v0.8.3 Defect 1 — pipeline order)', () => {
+  it('a repo-relative link whose LABEL is the path is fully removed (no broken empty link survives)', () => {
+    // The render pipeline runs neutralizeRepoRelativeLinks BEFORE neutralizeRepoPaths so the link
+    // collapses to an inline-code label first, which B then removes — no `[](…)` leak (gt 0.8.2 bug).
+    const { body: linkClean } = neutralizeRepoRelativeLinks('- Model: [c4/src/model.c4](../c4/src/model.c4)\n');
+    expect(linkClean).toBe('- Model: `c4/src/model.c4`\n'); // label wrapped, dead URL stripped
+    const { body: curated } = neutralizeRepoPaths(linkClean);
+    expect(curated).not.toContain('c4/src/model.c4');
+    expect(curated).not.toContain(']('); // no surviving link syntax
+    expect(curated).not.toMatch(/\[\]\(/); // and definitely no broken empty link
+    expect(curated).toBe('- Model:\n'); // trailing space stranded by the drop is cleaned
+  });
+
+  it('drops a repo-relative link with an EMPTY label whole; keeps an empty-label kept-URL link (v0.8.3 safety net)', () => {
+    const dropped = neutralizeRepoRelativeLinks('see [](../c4/src/x.c4) here');
+    expect(dropped.body).not.toContain('c4/src/x.c4');
+    expect(dropped.body).not.toContain('](');
+    expect(neutralizeRepoRelativeLinks('[](#anchor)').body).toBe('[](#anchor)'); // # url is kept
   });
 });
 
