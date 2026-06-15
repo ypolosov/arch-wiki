@@ -29,6 +29,8 @@ across passes — pass 2 changes only the restore value, so you do **not** re-tr
 
 Note: repo-relative links (`../iterations/`, `CLAUDE.md`, `c4/…`) are **not** wiki cross-links and are
 neutralized to plain text by Core (they would be dead hrefs in Confluence); `data.pages[].warnings` lists them.
+The mirror is a **curated projection**, not a byte copy: Core also strips each page's `## Sources` provenance
+section (it points back to the git source-of-truth `raw/…` files) — no git paths/repo URLs reach Confluence.
 A filename/domain-like neutralized label (`CLAUDE.md`) is wrapped in inline code so Confluence does not
 auto-link it to a dead `http://CLAUDE.md`.
 

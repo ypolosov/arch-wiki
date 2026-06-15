@@ -9437,6 +9437,43 @@ function neutralizeRepoRelativeLinks(content) {
   );
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
 }
+var SOURCES_HEADING_RE = /^##[ \t]+Sources[ \t]*$/i;
+var TOP_HEADING_RE = /^#{1,2}[ \t]/;
+var FENCE_LINE_RE = /^[ \t]*(?:```|~~~)/;
+function stripSourcesSection(content) {
+  const lines = content.split("\n");
+  const out = [];
+  let inFence = false;
+  let stripped = false;
+  for (let i = 0; i < lines.length; ) {
+    const line = lines[i];
+    if (FENCE_LINE_RE.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    if (!inFence && SOURCES_HEADING_RE.test(line)) {
+      stripped = true;
+      i += 1;
+      let fenced = false;
+      while (i < lines.length) {
+        const l = lines[i];
+        if (FENCE_LINE_RE.test(l)) {
+          fenced = !fenced;
+          i += 1;
+          continue;
+        }
+        if (!fenced && TOP_HEADING_RE.test(l)) break;
+        i += 1;
+      }
+      continue;
+    }
+    out.push(line);
+    i += 1;
+  }
+  return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
+}
 function confluencePageUrl(siteUrl, spaceKey, pageId) {
   const base = siteUrl ? siteUrl.replace(/\/+$/, "") : "";
   return `${base}/wiki/spaces/${spaceKey}/pages/${pageId}`;
@@ -9874,8 +9911,9 @@ async function renderConfluencePayload(deps) {
   const envelopes = /* @__PURE__ */ new Map();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
+    const { body: curated, stripped: sourcesStripped } = stripSourcesSection(normalizeBody2(parsed.content));
     const { body: resolved, crossLinks } = resolveCrossLinks(
-      normalizeBody2(parsed.content),
+      curated,
       graph,
       publishedMap,
       includedSources,
@@ -9920,6 +9958,9 @@ async function renderConfluencePayload(deps) {
     }
     if (stubbed.length > 0) {
       warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(", ")}`);
+    }
+    if (sourcesStripped) {
+      warnings.push("stripped the `## Sources` provenance section (git source-of-truth is not mirrored)");
     }
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {
@@ -10797,7 +10838,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.0";
+var PLUGIN_VERSION = "0.8.1";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

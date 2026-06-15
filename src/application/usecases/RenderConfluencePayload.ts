@@ -17,6 +17,7 @@ import {
   resolveCrossLinks,
   sortParentFirst,
   splitTitle,
+  stripSourcesSection,
   stubLocalImages,
 } from '../../domain/services/ConfluenceTree';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
@@ -191,8 +192,11 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const envelopes = new Map<string, PageEnvelope>();
   for (const p of included) {
     const parsed = await deps.repo.readParsed(p.relPath);
+    // The `## Sources` provenance section points at the git source-of-truth (raw/ paths) — strip it
+    // FIRST so it never reaches the mirror, the content hash or the RU mask (gt feedback v0.8.1).
+    const { body: curated, stripped: sourcesStripped } = stripSourcesSection(normalizeBody(parsed.content));
     const { body: resolved, crossLinks } = resolveCrossLinks(
-      normalizeBody(parsed.content),
+      curated,
       graph,
       publishedMap,
       includedSources,
@@ -254,6 +258,9 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
     }
     if (stubbed.length > 0) {
       warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(', ')}`);
+    }
+    if (sourcesStripped) {
+      warnings.push('stripped the `## Sources` provenance section (git source-of-truth is not mirrored)');
     }
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {

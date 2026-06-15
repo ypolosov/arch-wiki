@@ -224,6 +224,59 @@ export function neutralizeRepoRelativeLinks(content: string): { body: string; st
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
 }
 
+// A wiki page's `## Sources` provenance section (schema rule 6) points back to the git
+// source-of-truth (`raw/<file>` paths) — by-design IN the wiki, but it must NOT leak into the
+// Confluence mirror (the mirror is a curated projection of Layer-2, not a byte copy: no git
+// source-of-truth, raw paths or repo URLs). H2 heading; a section terminates at the next heading
+// of level ≤ 2 (a `###` subheading stays part of Sources) or EOF.
+const SOURCES_HEADING_RE = /^##[ \t]+Sources[ \t]*$/i;
+const TOP_HEADING_RE = /^#{1,2}[ \t]/;
+const FENCE_LINE_RE = /^[ \t]*(?:```|~~~)/;
+
+/**
+ * Drop the `## Sources` provenance section from a page body so the mirror never publishes a link
+ * back to the git source-of-truth (gt feedback v0.8.1: 36/133 pages leaked raw/ paths — the path
+ * sits as inline code, which `neutralizeRepoRelativeLinks` skips). Fence-aware (a `## Sources`
+ * inside a ```/~~~ code block is left alone). Pure; called BEFORE the content hash + RU masking, so
+ * the affected pages drift once and re-publish clean. The wiki schema (rule 6) is untouched —
+ * this is a Layer-2 → Confluence projection step only. Returns the body + whether a section was cut.
+ */
+export function stripSourcesSection(content: string): { body: string; stripped: boolean } {
+  const lines = content.split('\n');
+  const out: string[] = [];
+  let inFence = false;
+  let stripped = false;
+  for (let i = 0; i < lines.length; ) {
+    const line = lines[i]!;
+    if (FENCE_LINE_RE.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    if (!inFence && SOURCES_HEADING_RE.test(line)) {
+      stripped = true;
+      i += 1; // drop the `## Sources` heading itself
+      let fenced = false;
+      while (i < lines.length) {
+        const l = lines[i]!;
+        if (FENCE_LINE_RE.test(l)) {
+          fenced = !fenced;
+          i += 1;
+          continue;
+        }
+        if (!fenced && TOP_HEADING_RE.test(l)) break; // a level-≤2 heading ends the section (kept)
+        i += 1; // drop a Sources-section body line (incl. `###` subheadings)
+      }
+      continue;
+    }
+    out.push(line);
+    i += 1;
+  }
+  // Collapse any trailing blank lines a trailing-Sources cut leaves behind (the caller re-normalises).
+  return { body: out.join('\n').replace(/\n[ \t\n]*$/, '\n'), stripped };
+}
+
 /**
  * Build a Confluence page URL. Absolute when `siteUrl` is set (required for a link that
  * works inside a Jira issue's ADF), else root-relative `/wiki/…`. Pure.

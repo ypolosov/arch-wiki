@@ -279,6 +279,33 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(body).toContain('The wager flow is critical.');
   });
 
+  it('v0.8.1: strips the ## Sources git-provenance section from the mirror (drifts once, then clean)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    // a Sources section pointing at the git source-of-truth, with the path as inline code
+    // (which neutralizeRepoRelativeLinks would otherwise skip — the exact gt leak).
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\n---\n# QA-001: Latency\n\nThe budget is p95<200ms.\n\n## Sources\n- `raw/_synced/user-story-log/123-latency.md`\n',
+    );
+    const withSources = await renderConfluencePayload(deps(root));
+    const qa1 = withSources.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1.body).not.toContain('Sources');
+    expect(qa1.body).not.toContain('raw/_synced'); // no git source-of-truth path leaks
+    expect(qa1.body).toContain('The budget is p95<200ms.'); // real content kept
+    expect(qa1.warnings.some((w) => w.includes('Sources'))).toBe(true);
+
+    // The same artifact WITHOUT the Sources section hashes identically → publishing the curated
+    // mirror is stable (the section is gone before the hash; no oscillation run-to-run).
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\n---\n# QA-001: Latency\n\nThe budget is p95<200ms.\n',
+    );
+    const withoutSources = await renderConfluencePayload(deps(root));
+    const qa1b = withoutSources.pages.find((p) => p.basename === 'QA-001-latency')!;
+    expect(qa1b.contentHash).toBe(qa1.contentHash);
+  });
+
   it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();

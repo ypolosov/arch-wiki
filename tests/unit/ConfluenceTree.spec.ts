@@ -15,6 +15,7 @@ import {
   resolveCrossLinks,
   sortParentFirst,
   splitTitle,
+  stripSourcesSection,
   stubLocalImages,
   transformOutsideCode,
 } from '../../src/domain/services/ConfluenceTree';
@@ -192,6 +193,42 @@ describe('ConfluenceTree.neutralizeRepoRelativeLinks (v0.7)', () => {
     expect(neutralizeRepoRelativeLinks('Edit [config.json](./c.json).').body).toBe('Edit `config.json`.');
     // a label with spaces (not filename-like) is left as plain text
     expect(neutralizeRepoRelativeLinks('See [the notes](../n.md).').body).toBe('See the notes.');
+  });
+});
+
+describe('ConfluenceTree.stripSourcesSection (v0.8.1 — no git source-of-truth in the mirror)', () => {
+  it('strips a trailing ## Sources section (the common case)', () => {
+    const r = stripSourcesSection('# QA-023: Latency\n\nBody prose.\n\n## Sources\n- `raw/notes/x.md`\n');
+    expect(r.stripped).toBe(true);
+    expect(r.body).toBe('# QA-023: Latency\n\nBody prose.\n');
+    expect(r.body).not.toContain('Sources');
+    expect(r.body).not.toContain('raw/notes/x.md');
+  });
+
+  it('keeps a following level-≤2 section (Sources ends at the next ## / # heading)', () => {
+    const src = '## Sources\n- `raw/a.md`\n\n## Decision Drivers\n- [[QA-001]]\n';
+    const r = stripSourcesSection(src);
+    expect(r.body).toBe('## Decision Drivers\n- [[QA-001]]\n');
+  });
+
+  it('does NOT treat a ### subheading inside Sources as a terminator', () => {
+    const src = '## Sources\n### primary\n- `raw/a.md`\n### secondary\n- `raw/b.md`\n';
+    const r = stripSourcesSection(src);
+    expect(r.stripped).toBe(true);
+    expect(r.body.replace(/\n+$/, '')).toBe(''); // whole section (incl. ### subheadings) removed
+  });
+
+  it('is fence-aware — a ## Sources INSIDE a code block is left alone', () => {
+    const src = '# Doc\n\n```md\n## Sources\n- raw/x.md\n```\n\nReal prose.\n';
+    const r = stripSourcesSection(src);
+    expect(r.stripped).toBe(false);
+    expect(r.body).toBe(src.replace(/\n+$/, '\n'));
+    expect(r.body).toContain('## Sources'); // the fenced example is preserved verbatim
+  });
+
+  it('is a no-op when there is no Sources section', () => {
+    const src = '# UC-014: Login\n\nNo provenance here.\n';
+    expect(stripSourcesSection(src)).toEqual({ body: src, stripped: false });
   });
 });
 
