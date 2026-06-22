@@ -22,6 +22,19 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
 | **2 · Wiki** (synthesis) | everything else under `docs/architecture/` | LLM maintains, human curates |
 | **3 · Schema** (rules) | this file | human |
 
+## Language convention
+
+- **Raw (Layer 1)** — any language; author/source notes (often the team's working language).
+- **Wiki graph (Layer 2: drivers, ADRs, concepts, entities, C4)** — **English**. This is the
+  source of truth and the whole corpus is English. **Author every new artifact in English even
+  when the raw source or the discussion is in another language.** (The mirror pipeline assumes
+  an English canon: the content hash is over the English body and translation runs English →
+  target — so a non-English graph would break drift-stability and translation.)
+- **Confluence mirror (projection)** — translated at publish time per `.arch-wiki/config.json`
+  `integrations.confluence.language` (when set) + `preserveTerms`, via `/arch-wiki:publish`
+  (`finalize-confluence`). **Never hand-author the graph in the mirror language** — the projection
+  is generated, not written.
+
 ## Methodology roles (the ontology)
 
 - **ADD 3.0** = design process. Inputs = drivers (`drivers/`); the iterative loop

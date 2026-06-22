@@ -13,6 +13,13 @@ Read `docs/architecture/CLAUDE.md` first and obey it exactly: ID schemes, the
 arc42 map, filename conventions, the wikilink convention, and the invariants.
 
 ## Hard rules
+- **Author the graph in English.** Every new/updated Layer-2 artifact (drivers, ADRs, concepts,
+  entities, C4) is written in **English** — the graph is the English source of truth — **even when
+  the raw source or the discussion is in another language**. The mirror's language is separate
+  (config `integrations.confluence.language`) and applied only at publish; **never hand-author the
+  graph in the mirror language.** (Defer to the project `CLAUDE.md` "Language convention" if it
+  states a different canon — but note the mirror pipeline assumes an English canon, so overriding
+  it disables safe translation.)
 - **Never modify anything under `docs/architecture/raw/`** — sources are immutable.
 - **Never rewrite an accepted ADR.** New decisions are new ADRs with `Status:
   proposed`; superseding follows the `madr-format` rules.

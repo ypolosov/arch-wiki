@@ -9,7 +9,10 @@ You are running the **Ingest** operation of the LLM-Wiki.
 Source argument: `$ARGUMENTS`
 
 1. Read and fully internalize the schema in `docs/architecture/CLAUDE.md`
-   (ID schemes, arc42 map, wikilink convention, operation rules). It is the contract.
+   (ID schemes, arc42 map, wikilink convention, **Language convention**, operation rules).
+   It is the contract. The Layer-2 graph (drivers/ADRs/concepts/entities/C4) is authored in
+   **English** (the source of truth) even when the raw source is in another language; the mirror
+   is translated only at publish via config.
 2. Locate the raw source: if `$ARGUMENTS` is a path, use it; otherwise search
    `docs/architecture/raw/` for the best match. **Never modify files in `raw/`.**
 3. Delegate the extraction pass to the **architecture-ingestor** subagent, passing

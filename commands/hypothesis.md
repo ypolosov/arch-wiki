@@ -19,4 +19,5 @@ the traceability frontmatter, and the kanban card — never write these by hand.
    back-reference, an optional `realizes_driver` placeholder, and auto-adds a
    `kanban.md` backlog card (so the page is not an orphan).
 5. From the JSON result report `data.path` and `data.kanbanCard`. Then help fill the
-   hypothesis body in prose (assumption, rationale, what would validate/refute it).
+   hypothesis body in prose (assumption, rationale, what would validate/refute it) — in
+   **English** (the graph is the English source of truth, even when the raw source is not).
