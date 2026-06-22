@@ -9394,6 +9394,8 @@ function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey, 
       crossLinks.push({ target, resolved: true, pageId });
       return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
     }
+    const phrase = included ? "" : humanizeRepoRef(target);
+    if (phrase) return phrase;
     if (reserveUnresolved && included) {
       crossLinks.push({ target, resolved: false });
       return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
@@ -9401,7 +9403,23 @@ function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey, 
     crossLinks.push({ target, resolved: false });
     return label;
   });
-  return { body, crossLinks };
+  const linked = transformOutsideCode(
+    body,
+    (chunk) => chunk.replace(MD_LINK_RE, (m, mdLabel, url) => {
+      if (KEEP_LINK_URL.test(url)) return m;
+      const noAnchor = url.replace(/[#?].*$/, "");
+      if (!/\.md$/i.test(noAnchor)) return m;
+      const base = noAnchor.replace(/^.*\//, "").replace(/\.md$/i, "");
+      const page = g.byBasename.get(base);
+      const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : void 0;
+      if (pageId) {
+        crossLinks.push({ target: base, resolved: true, pageId });
+        return `[${mdLabel}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+      }
+      return m;
+    })
+  );
+  return { body: linked, crossLinks };
 }
 function splitTitle(title) {
   const m = /^\s*([A-Za-z]+-\d+\S*:)\s*(.*)$/.exec(title);
@@ -9476,12 +9494,37 @@ function stripSourcesSection(content) {
   }
   return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
 }
-var REPO_PATH_SRC = "(?:(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]*|[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b|(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b)";
+var REPO_PATH_SRC = "(?:(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-*]*|[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b|(?:risks|gap-analysis|kanban|glossary|utility-tree|CLAUDE)\\.md\\b)";
 var REPO_PATH_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`, "g");
 var REPO_PATH_CONTAINS_RE = new RegExp(`(?<![\\w./\\-])${REPO_PATH_SRC}`);
 var REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`);
 function isRepoInternalPath(token) {
   return REPO_PATH_ANCHORED_RE.test(token.trim());
+}
+var REGISTER_PHRASES = {
+  risks: "the risk register",
+  "gap-analysis": "the gap analysis",
+  kanban: "the backlog",
+  glossary: "the glossary",
+  "utility-tree": "the utility tree",
+  claude: "the schema contract"
+};
+function humanizeRepoRef(token) {
+  const base = token.trim().replace(/^[`'"]+|[`'"]+$/g, "").replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
+  if (/\.c4\b/.test(base) || /(?:^|\/)c4(?:\/|$)/.test(base)) {
+    if (/(?:^|\/)views?\.c4\b/.test(base)) return "the C4 views";
+    if (/(?:^|\/)deployment\.c4\b/.test(base)) return "the C4 deployment view";
+    return "the C4 model";
+  }
+  if (/\.csv\b/.test(base)) return "the data file";
+  if (!base.includes("/")) {
+    const reg = REGISTER_PHRASES[base.replace(/\.md$/, "")];
+    if (reg) return reg;
+  }
+  if (/(?:^|\/)raw(?:\/|$)/.test(base)) return "the source brief";
+  if (/(?:^|\/)\.foam(?:\/|$)/.test(base)) return "";
+  if (/(?:^|\/)docs\/architecture(?:\/|$)/.test(base)) return "the architecture wiki";
+  return "";
 }
 var SOURCE_FIELD_RE = /^(\s*[-*]?\s*\*\*Source[^*\n]*:\*\*)(.*)$/i;
 function stripSourceProvenanceLines(content) {
@@ -9510,39 +9553,26 @@ function stripSourceProvenanceLines(content) {
   return { body: out.join("\n").replace(/\n[ \t\n]*$/, "\n"), stripped };
 }
 var B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
-var PROVENANCE_PAREN_RE = new RegExp(
-  "[ \\t]*\\((?:from|see|source):?[ \\t]+`?" + REPO_PATH_SRC + "`?[ \\t]*\\)",
-  "gi"
-);
-var CONNECTIVE = "(?:in|into|on|onto|at|to|of|for|from|via|per|under|within|with|by|see)";
-var CONNECTIVE_PATH_RE = new RegExp("\\b" + CONNECTIVE + "[ \\t]+`?" + REPO_PATH_SRC + "`?", "gi");
 var EMPTY_PROVENANCE_PAREN_RE = /\((?:from|see|source):?[ \t]*\)/gi;
 var INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
 function neutralizeRepoPaths(content) {
   let neutralized = false;
   const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
     let s = chunk;
-    s = s.replace(PROVENANCE_PAREN_RE, () => {
-      neutralized = true;
-      return "";
-    });
-    s = s.replace(CONNECTIVE_PATH_RE, () => {
-      neutralized = true;
-      return "";
-    });
     s = s.replace(INLINE_CODE_SPAN_RE, (m) => {
-      if (isRepoInternalPath(m.slice(1, -1))) {
+      const inner = m.slice(1, -1);
+      if (isRepoInternalPath(inner)) {
         neutralized = true;
-        return "";
+        return humanizeRepoRef(inner);
       }
       return m;
     });
-    s = s.replace(REPO_PATH_RE, () => {
+    s = s.replace(REPO_PATH_RE, (m) => {
       neutralized = true;
-      return "";
+      return humanizeRepoRef(m);
     });
     if (s === chunk) return chunk;
-    return s.replace(EMPTY_PROVENANCE_PAREN_RE, "").replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1").replace(/[ \t]+\n/g, "\n");
+    return s.replace(EMPTY_PROVENANCE_PAREN_RE, "").replace(/\([ \t]*[,;][ \t]*/g, "(").replace(/\([ \t]+/g, "(").replace(/\([ \t]*\)/g, "").replace(/([^.\n])\.[ \t]*\.(?!\.)/g, "$1.").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1").replace(/[ \t]+\n/g, "\n");
   });
   return { body, neutralized };
 }
@@ -9560,8 +9590,8 @@ function stubLocalImages(content) {
     content,
     (chunk) => chunk.replace(LOCAL_IMAGE_RE, (_m, alt, src) => {
       stubbed.push(src);
-      const label = alt.trim() ? ` (${alt.trim()})` : "";
-      return `\u{1F4D0} C4 diagram placeholder \u2014 source \`${src}\`${label} _(attachment embedding pending)_`;
+      const descriptor = alt.trim() || humanizeRepoRef(src) || "a diagram";
+      return `\u{1F4D0} C4 diagram placeholder \u2014 ${descriptor} _(attachment embedding pending)_`;
     })
   );
   return { body, stubbed: [...new Set(stubbed)].sort((a, b) => a.localeCompare(b)) };
@@ -10918,7 +10948,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.4";
+var PLUGIN_VERSION = "0.8.5";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

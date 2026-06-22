@@ -202,7 +202,8 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(qa1.realizedBy).toEqual([{ key: 'GRMTCH-5', url: 'https://acme.atlassian.net/browse/GRMTCH-5' }]);
     // R7: the key is wrapped in inline code so the RU projection protects it byte-exact.
     expect(qa1.body).toContain('**Realized by:** [`GRMTCH-5`](https://acme.atlassian.net/browse/GRMTCH-5)');
-    expect(qa1.body).toContain('C4 diagram placeholder — source `../c4/ctx.png`');
+    expect(qa1.body).toContain('📐 C4 diagram placeholder — C4 context _(attachment embedding pending)_');
+    expect(qa1.body).not.toContain('../c4/ctx.png'); // v0.8.5: the git src path is not emitted into the body
     expect(qa1.body).not.toContain('![C4 context]');
   });
 
@@ -306,7 +307,7 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(qa1b.contentHash).toBe(qa1.contentHash);
   });
 
-  it('v0.8.2: strips **Source:** fields, neutralizes repo paths, and excludes CLAUDE.md from the mirror', async () => {
+  it('v0.8.2/0.8.5: renames **Source:** fields + repo paths to human phrases, excludes CLAUDE.md', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();
     await sys.writeFile(
@@ -320,21 +321,21 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(plan.pages.some((p) => p.basename === 'CLAUDE')).toBe(false); // D: excluded from the mirror
 
     const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
-    expect(qa1.body).not.toContain('Source'); // A: **Source:** field line dropped
+    expect(qa1.body).toContain('**Source:** the source brief'); // A: path renamed, field kept (v0.8.5)
+    expect(qa1.body).toContain('The model lives in the C4 model (from the data file).'); // B: renamed in place
     expect(qa1.body).not.toContain('raw/TODO.md');
-    expect(qa1.body).not.toContain('c4/src/iam.c4'); // B: inline-code repo path dropped
-    expect(qa1.body).not.toContain('raw/go-live-plan.csv'); // B: provenance parenthetical dropped
+    expect(qa1.body).not.toContain('c4/src/iam.c4');
+    expect(qa1.body).not.toContain('raw/go-live-plan.csv');
     expect(qa1.body).toContain('product.gaming.brand.core.service'); // no false positive on the C4 id
     expect(qa1.warnings.some((w) => w.includes('**Source:**'))).toBe(true);
     expect(qa1.warnings.some((w) => w.includes('repo-internal path'))).toBe(true);
   });
 
-  it('v0.8.3: a repo-relative link whose label IS the path leaves no broken empty link or leaked URL', async () => {
+  it('v0.8.3/0.8.5: a repo-relative link whose label IS the path renames cleanly (no broken empty link)', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();
-    // The exact gt 0.8.2 regression: B ran before the link neutraliser, stripped the path from the
-    // LABEL → `[](../c4/src/model.c4)`, and the dead URL survived. With B reordered after the link
-    // neutraliser the whole reference is removed cleanly.
+    // gt 0.8.2 regression was a leaked dead URL `[](../c4/src/model.c4)`; v0.8.3 reordered B after the
+    // link neutraliser; v0.8.5 RENAMES the collapsed label → a human phrase instead of emptying it.
     await sys.writeFile(
       path.join(root, 'arc42/05-building-blocks.md'),
       '# Building Blocks\n\n- Model: [c4/src/model.c4](../c4/src/model.c4)\n- Risks tracked in `risks.md`.\n- Note (from `raw/go-live-plan.csv`): pending.\n',
@@ -344,15 +345,14 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(bb.body).not.toContain('c4/src/model.c4'); // path gone from label AND url
     expect(bb.body).not.toContain('../c4/'); // no dead repo-relative href survives
     expect(bb.body).not.toMatch(/\[\]\(/); // no broken empty link
-    expect(bb.body).toContain('- Model:'); // the list item survives, just without the path
-    // Defect 2: prose stays clean — no dangling preposition-before-period, no `(from):`
-    expect(bb.body).toContain('Risks tracked.');
-    expect(bb.body).not.toMatch(/tracked in\.?$/m);
-    expect(bb.body).not.toContain('(from');
-    expect(bb.body).toContain('Note: pending.');
+    expect(bb.body).toContain('- Model: the C4 model'); // renamed, not emptied (v0.8.5)
+    expect(bb.body).toContain('Risks tracked in the risk register.'); // connective + path kept whole
+    expect(bb.body).toContain('Note (from the data file): pending.'); // parenthetical kept
+    expect(bb.body).not.toContain('risks.md');
+    expect(bb.body).not.toContain('go-live-plan.csv');
   });
 
-  it('v0.8.3: a **Source:** field keeps its non-git remainder (Jira ref + attribution), cutting only the path', async () => {
+  it('v0.8.3/0.8.5: a **Source:** field keeps its non-git remainder, renaming only the path', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();
     await sys.writeFile(
@@ -363,8 +363,37 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     const c = plan.pages.find((p) => p.basename === 'sweepstakes')!;
     expect(c.body).toContain('GRM-3705'); // Jira ref preserved
     expect(c.body).toContain('sweepstakes strategy'); // attribution preserved
-    expect(c.body).not.toContain('raw/sweepstakes.md'); // only the git path is cut
+    expect(c.body).toContain('(the source brief)'); // path renamed in place (v0.8.5)
+    expect(c.body).not.toContain('raw/sweepstakes.md');
     expect(c.warnings.some((w) => w.includes('**Source:**'))).toBe(true);
+  });
+
+  it('v0.8.5 acceptance (i): zero repo paths in body OR restore[].original, even in RU mode', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    // Every leak-prone shape on one page: a local C4 image (was the hidden restore leak), an inline
+    // path, a bare path, a glob, a register wikilink, a path inside a markdown-link label, a Source field.
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-latency.md'),
+      '---\ntype: quality-attribute\n---\n# QA-001: Latency\n\n' +
+        '![C4 context](../c4/src/context.png)\n\n' +
+        'Model in `c4/src/*.c4`; see raw/go-live-plan.csv and gap-analysis.md.\n\n' +
+        'Tracked (see [[risks]]); also [model](../c4/src/model.c4).\n\n' +
+        '**Source:** docs/architecture/raw/TODO.md\n',
+    );
+    const ruCfg = ProjectConfig.from(
+      ProjectConfigSchema.parse({ integrations: { confluence: { space: 'PP', language: 'ru' } } }),
+    );
+    const plan = await renderConfluencePayload({ ...deps(root), config: ruCfg });
+    const qa1 = plan.pages.find((p) => p.basename === 'QA-001-latency')!;
+    // The masked body PLUS every restored span must be free of any repo-internal path token.
+    const haystacks = [qa1.body, ...qa1.restore.map((r) => r.original)];
+    const LEAK = /(?:^|[^\w/.-])(?:\.{1,2}\/)*(?:raw|c4|\.foam|docs\/architecture)\/|\.c4\b|\.csv\b|\b(?:risks|gap-analysis|kanban|glossary|utility-tree)\.md\b/;
+    for (const h of haystacks) expect(h).not.toMatch(LEAK);
+    // and the rename actually happened (human phrases present after restore)
+    const { body: restored } = applyRestore(qa1.body, qa1.restore);
+    expect(restored).toContain('the C4 model');
+    expect(restored).toContain('the risk register');
   });
 
   it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {

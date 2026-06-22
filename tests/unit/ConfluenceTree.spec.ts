@@ -13,6 +13,7 @@ import {
   parentSourceOf,
   protectStructuralSpans,
   isRepoInternalPath,
+  humanizeRepoRef,
   neutralizeRepoPaths,
   resolveCrossLinks,
   sortParentFirst,
@@ -112,6 +113,39 @@ describe('ConfluenceTree.resolveCrossLinks', () => {
       { target: 'cache', resolved: false },
       { target: 'ghost', resolved: false },
     ]);
+  });
+
+  it('renames an EXCLUDED-register wikilink to its human phrase, discarding a path-bearing alias (v0.8.5 class 5)', () => {
+    // risks/gap-analysis are excluded from the mirror → can never be a page; rename, do not drop to a
+    // bare `risks` (or an alias that still carries `risks.md (R-007)` → which B then mangled to `( (R-007))`).
+    const g = buildGraph([page('drivers/quality-attributes/QA-001.md')]); // risks NOT in graph/included
+    const included = new Set(['drivers/quality-attributes/QA-001.md']);
+    const { body, crossLinks } = resolveCrossLinks(
+      'Tracked (see [[risks]]) and [[risks#^R-007|risks.md (R-007)]] applies; ghost [[ghost]].',
+      g,
+      new Map(),
+      included,
+      'PP',
+    );
+    expect(body).toBe('Tracked (see the risk register) and the risk register applies; ghost ghost.');
+    // a deliberate register rename is not logged as a cross-link; only the genuine unresolved `ghost` is.
+    expect(crossLinks).toEqual([{ target: 'ghost', resolved: false }]);
+  });
+
+  it('resolves a MARKDOWN-form .md cross-link to a mirrored neighbour page (v0.8.5 class 6)', () => {
+    const g = buildGraph([page('adrs/0023-old.md'), page('adrs/0027-new.md')]);
+    const published = new Map<string, string>([['adrs/0023-old.md', '777']]);
+    const included = new Set(['adrs/0023-old.md', 'adrs/0027-new.md']);
+    const { body, crossLinks } = resolveCrossLinks(
+      '**Supersedes:** [ADR-0023](0023-old.md) and [ADR-0099](0099-missing.md).',
+      g,
+      published,
+      included,
+      'PP',
+    );
+    // published neighbour → /wiki link; not-mirrored target left as-is for neutralizeRepoRelativeLinks.
+    expect(body).toBe('**Supersedes:** [ADR-0023](/wiki/spaces/PP/pages/777) and [ADR-0099](0099-missing.md).');
+    expect(crossLinks).toEqual([{ target: '0023-old', resolved: true, pageId: '777' }]);
   });
 });
 
@@ -279,19 +313,55 @@ describe('ConfluenceTree.isRepoInternalPath (v0.8.2 — strict anchored allowlis
   });
 });
 
+describe('ConfluenceTree.humanizeRepoRef (v0.8.5 — DELETE→RENAME map)', () => {
+  it('maps each repo-ref kind to its human phrase', () => {
+    const cases: [string, string][] = [
+      ['risks.md', 'the risk register'],
+      ['risks', 'the risk register'],
+      ['risks#^R-007', 'the risk register'],
+      ['gap-analysis.md', 'the gap analysis'],
+      ['kanban', 'the backlog'],
+      ['glossary.md', 'the glossary'],
+      ['utility-tree', 'the utility tree'],
+      ['CLAUDE.md', 'the schema contract'],
+      ['c4/src/model.c4', 'the C4 model'],
+      ['c4/src/views.c4', 'the C4 views'],
+      ['c4/src/deployment.c4', 'the C4 deployment view'],
+      ['c4/src/*.c4', 'the C4 model'], // glob → the model
+      ['c4/', 'the C4 model'], // bare root
+      ['`c4/src/iam.c4`', 'the C4 model'], // wrapping backticks tolerated
+      ['raw/TODO.md', 'the source brief'],
+      ['raw/', 'the source brief'],
+      ['docs/architecture/raw/TODO.md', 'the source brief'], // raw/ segment wins over the wiki root
+      ['raw/go-live-plan.csv', 'the data file'], // .csv extension wins over raw/
+      ['data/metrics.csv', 'the data file'],
+      ['docs/architecture/x.md', 'the architecture wiki'],
+    ];
+    for (const [token, phrase] of cases) {
+      expect(humanizeRepoRef(token)).toBe(phrase);
+    }
+  });
+
+  it('drops .foam tooling and returns "" for an unrecognised token', () => {
+    expect(humanizeRepoRef('.foam/templates/concept.md')).toBe('');
+    expect(humanizeRepoRef('QA-099')).toBe(''); // not a repo ref → caller keeps the alias
+    expect(humanizeRepoRef('product.gaming.brand.core.service')).toBe(''); // never a C4-id false positive
+  });
+});
+
 describe('ConfluenceTree.stripSourceProvenanceLines (v0.8.2 A)', () => {
-  it('drops a **Source:** field whose value is a repo path', () => {
+  it('renames the repo path in a **Source:** field to its human phrase (v0.8.5 RENAME)', () => {
     const r = stripSourceProvenanceLines('# CON-007\n\n**Source:** `raw/TODO.md`\n\n## Constraint\nText.\n');
     expect(r.stripped).toBe(true);
-    expect(r.body).not.toContain('Source');
+    expect(r.body).toContain('**Source:** the source brief'); // path renamed, field kept
     expect(r.body).not.toContain('raw/TODO.md');
     expect(r.body).toContain('## Constraint');
   });
 
-  it('drops a labelled **Source for …:** field citing a repo path', () => {
+  it('renames a labelled **Source for …:** field citing a repo path (v0.8.5)', () => {
     const r = stripSourceProvenanceLines('**Source for the maintainer role list:** docs/architecture/raw/owners.md\n');
     expect(r.stripped).toBe(true);
-    expect(r.body.trim()).toBe('');
+    expect(r.body.trim()).toBe('**Source for the maintainer role list:** the source brief');
   });
 
   it('KEEPS the QA-scenario **Source:** field (value is an actor, not a path)', () => {
@@ -304,40 +374,45 @@ describe('ConfluenceTree.stripSourceProvenanceLines (v0.8.2 A)', () => {
     expect(stripSourceProvenanceLines(src).stripped).toBe(false);
   });
 
-  it('KEEPS the non-git remainder of the value, cutting only the path (v0.8.3 Minor 1)', () => {
+  it('KEEPS the non-git remainder of the value, renaming only the path (v0.8.5 Minor 1)', () => {
     const r = stripSourceProvenanceLines('- **Source:** GRM-3705 — sweepstakes strategy (raw/sweepstakes.md)\n');
     expect(r.stripped).toBe(true);
     expect(r.body).toContain('GRM-3705'); // Jira ref preserved
     expect(r.body).toContain('sweepstakes strategy'); // expert attribution preserved
     expect(r.body).toContain('**Source:**'); // the field label survives
-    expect(r.body).not.toContain('raw/sweepstakes.md'); // only the git path is cut
-    expect(r.body).not.toContain('(raw'); // and the now-empty parenthetical is tidied away
-    expect(r.body.trimEnd()).toBe('- **Source:** GRM-3705 — sweepstakes strategy');
+    expect(r.body).not.toContain('raw/sweepstakes.md'); // only the git path is touched
+    expect(r.body.trimEnd()).toBe('- **Source:** GRM-3705 — sweepstakes strategy (the source brief)');
   });
 });
 
 describe('ConfluenceTree.neutralizeRepoPaths (v0.8.2 B)', () => {
-  it('drops a (from <repo-path>) provenance parenthetical, incl. in a heading', () => {
+  it('renames a repo path inside a (from …) parenthetical, keeping the aside (v0.8.5)', () => {
     const r = neutralizeRepoPaths('## Go-live rebase (from raw/go-live-plan.csv)\n\n> Note (from raw/notes.md)\n');
     expect(r.neutralized).toBe(true);
-    expect(r.body).toContain('## Go-live rebase');
+    expect(r.body).toContain('## Go-live rebase (from the data file)');
+    expect(r.body).toContain('> Note (from the source brief)');
     expect(r.body).not.toContain('raw/go-live-plan.csv');
     expect(r.body).not.toContain('raw/notes.md');
-    expect(r.body).not.toContain('(from');
   });
 
-  it('drops an inline-code repo path and tidies the gap', () => {
+  it('renames an inline-code repo path to its phrase, leaving no backtick or doubled space (v0.8.5)', () => {
     const r = neutralizeRepoPaths('The model lives in `c4/src/iam.c4` for reference.');
     expect(r.neutralized).toBe(true);
-    expect(r.body).not.toContain('c4/src/iam.c4');
+    expect(r.body).toBe('The model lives in the C4 model for reference.');
     expect(r.body).not.toContain('`'); // the code span is gone
-    expect(r.body).not.toMatch(/ {2,}/); // no doubled space left behind
   });
 
-  it('drops a bare register filename in prose', () => {
+  it('renames a bare register filename in prose (v0.8.5)', () => {
     const r = neutralizeRepoPaths('See glossary.md and risks.md for context.');
-    expect(r.body).not.toContain('glossary.md');
-    expect(r.body).not.toContain('risks.md');
+    expect(r.body).toBe('See the glossary and the risk register for context.');
+  });
+
+  it('renames an inline-code c4 glob WHOLE, leaving no orphan *.c4 or stray backtick (v0.8.5 class 7)', () => {
+    const r = neutralizeRepoPaths('LikeC4 sources in `c4/src/*.c4`, validated via `npm run validate`.');
+    expect(r.neutralized).toBe(true);
+    expect(r.body).toBe('LikeC4 sources in the C4 model, validated via `npm run validate`.');
+    expect(r.body).not.toContain('*.c4'); // no orphaned glob tail
+    expect((r.body.match(/`/g) ?? []).length).toBe(2); // exactly the surviving `npm run validate` span — no unpaired backtick
   });
 
   it('does NOT touch a C4 element id or a fenced code sample (no false positives)', () => {
@@ -368,32 +443,33 @@ describe('ConfluenceTree.neutralizeRepoPaths (v0.8.2 B)', () => {
   });
 
   // ── v0.8.3 Defect 2: backtick-aware provenance paren + connective-absorb (no dangling prose) ──
-  it('removes a backticked provenance parenthetical whole — no dangling (from): (v0.8.3 Defect 2a)', () => {
+  it('renames a backticked repo path inside a parenthetical, keeping the keyword (v0.8.5)', () => {
     const r = neutralizeRepoPaths('Note (from `raw/release-management-and-deployment.md`): see below.');
     expect(r.neutralized).toBe(true);
     expect(r.body).not.toContain('raw/release-management-and-deployment.md');
-    expect(r.body).not.toContain('(from'); // the whole `(from `…`)` is gone, not just the backticked span
-    expect(r.body).toBe('Note: see below.');
+    expect(r.body).toBe('Note (from the source brief): see below.');
   });
 
-  it('drops the connective WITH the path so no preposition is left before the period (v0.8.3 Defect 2b)', () => {
-    expect(neutralizeRepoPaths('Risk tracked in `risks.md`.').body).toBe('Risk tracked.');
-    expect(neutralizeRepoPaths('Go-live readiness in `raw/go-live-plan.csv`.').body).toBe('Go-live readiness.');
-    expect(neutralizeRepoPaths('Defined in c4/src/iam.c4 for clarity.').body).toBe('Defined for clarity.');
+  it('renames a connective-introduced path in place, keeping the whole sentence (v0.8.5)', () => {
+    // RENAME (not DELETE): the connective ("in") and the punctuation survive — no dangling stump.
+    expect(neutralizeRepoPaths('Risk tracked in `risks.md`.').body).toBe('Risk tracked in the risk register.');
+    expect(neutralizeRepoPaths('Go-live readiness in `raw/go-live-plan.csv`.').body).toBe('Go-live readiness in the data file.');
+    expect(neutralizeRepoPaths('Defined in c4/src/iam.c4 for clarity.').body).toBe('Defined in the C4 model for clarity.');
   });
 
-  it('does NOT let a connective swallow a newline (no line/paragraph/heading merge) (v0.8.3 review)', () => {
-    // `\s` would span `\n`; `[ \t]+` keeps the match on one line. The path is still removed (step 3/4),
-    // structure is preserved (no merged lines, no deleted blank line, no paragraph pulled into a heading).
+  it('renaming a line-wrapped path never eats a newline (no line/paragraph/heading merge) (v0.8.5)', () => {
+    // The rename is an in-place substitution of the path token, so newlines/blank lines around it are
+    // untouched — structure is preserved (no merged lines, no paragraph pulled into a heading).
     const src = 'The model is defined in\n`c4/src/x.c4` and used widely.\n\nNext paragraph.';
     const wrapped = neutralizeRepoPaths(src);
-    expect(wrapped.body).not.toContain('c4/src/x.c4'); // path gone
+    expect(wrapped.body).not.toContain('c4/src/x.c4'); // path gone (renamed)
     expect(wrapped.body).toContain('\n\nNext paragraph.'); // blank line + next paragraph intact
     expect((wrapped.body.match(/\n/g) ?? []).length).toBe((src.match(/\n/g) ?? []).length); // no newline eaten
-    expect(wrapped.body).toMatch(/defined in\n/); // first line not merged with the second
+    expect(wrapped.body).toMatch(/defined in\nthe C4 model/); // path renamed in place, line break kept
 
-    const heading = neutralizeRepoPaths('## Defined in\n\nraw/x.md is the source.');
-    expect(heading.body).toContain('## Defined in\n'); // heading not pulled into the next paragraph
+    const heading = neutralizeRepoPaths('## Defined here\n\nraw/x.md is the source.');
+    expect(heading.body).toContain('## Defined here\n'); // heading not pulled into the next paragraph
+    expect(heading.body).toContain('the source brief is the source.'); // bare path renamed
     expect(heading.body).not.toContain('raw/x.md');
   });
 
@@ -431,7 +507,7 @@ describe('ConfluenceTree.neutralizeRepoRelativeLinks + neutralizeRepoPaths (v0.8
     expect(curated).not.toContain('c4/src/model.c4');
     expect(curated).not.toContain(']('); // no surviving link syntax
     expect(curated).not.toMatch(/\[\]\(/); // and definitely no broken empty link
-    expect(curated).toBe('- Model:\n'); // trailing space stranded by the drop is cleaned
+    expect(curated).toBe('- Model: the C4 model\n'); // v0.8.5: renamed to a phrase, not emptied
   });
 
   it('drops a repo-relative link with an EMPTY label whole; keeps an empty-label kept-URL link (v0.8.3 safety net)', () => {
@@ -467,19 +543,30 @@ describe('ConfluenceTree.jiraBrowseUrl (v0.8)', () => {
   });
 });
 
-describe('ConfluenceTree.stubLocalImages (v0.8)', () => {
-  it('stubs local image embeds (with the src in inline code) and keeps absolute ones', () => {
+describe('ConfluenceTree.stubLocalImages (v0.8 / v0.8.5 no-leak)', () => {
+  it('stubs a local image by its alt text WITHOUT emitting the repo src path; keeps absolute ones', () => {
     const src = 'See ![C4 context](../c4/context.png) and ![remote](https://x.io/a.png).';
     const { body, stubbed } = stubLocalImages(src);
-    expect(body).toContain('C4 diagram placeholder — source `../c4/context.png` (C4 context)');
+    expect(body).toContain('📐 C4 diagram placeholder — C4 context _(attachment embedding pending)_');
+    expect(body).not.toContain('../c4/context.png'); // v0.8.5: the git src path never enters the body
     expect(body).not.toContain('![C4 context]'); // local embed replaced
     expect(body).toContain('![remote](https://x.io/a.png)'); // absolute kept
-    expect(stubbed).toEqual(['../c4/context.png']);
+    expect(stubbed).toEqual(['../c4/context.png']); // still reported for the operator warning
+  });
+
+  it('falls back to the humanised src kind when there is no alt text (no path leak)', () => {
+    expect(stubLocalImages('![](../c4/src/context.png)').body).toContain(
+      '📐 C4 diagram placeholder — the C4 model _(attachment embedding pending)_',
+    );
+    expect(stubLocalImages('![](../img/x.png)').body).toContain(
+      '📐 C4 diagram placeholder — a diagram _(attachment embedding pending)_',
+    );
+    expect(stubLocalImages('![](../c4/src/context.png)').body).not.toContain('c4/src');
   });
 
   it('is inline-safe — no leading blockquote `> ` lands mid-line for an inline image (R5)', () => {
     const { body } = stubLocalImages('Diagram ![d](../c4/x.png) shows the flow.');
-    expect(body).toBe('Diagram 📐 C4 diagram placeholder — source `../c4/x.png` (d) _(attachment embedding pending)_ shows the flow.');
+    expect(body).toBe('Diagram 📐 C4 diagram placeholder — d _(attachment embedding pending)_ shows the flow.');
     expect(body).not.toContain('> '); // would be a stray mid-line `>` in Confluence
   });
 
@@ -492,7 +579,8 @@ describe('ConfluenceTree.stubLocalImages (v0.8)', () => {
   it('stubs a local image whose alt text contains brackets (review M3)', () => {
     const { body, stubbed } = stubLocalImages('![a [x] b](../diagram.png)');
     expect(stubbed).toEqual(['../diagram.png']);
-    expect(body).toContain('C4 diagram placeholder — source `../diagram.png` (a [x] b)');
+    expect(body).toContain('📐 C4 diagram placeholder — a [x] b _(attachment embedding pending)_');
+    expect(body).not.toContain('../diagram.png'); // path not in body
     expect(body).not.toContain('![a [x] b]');
   });
 });

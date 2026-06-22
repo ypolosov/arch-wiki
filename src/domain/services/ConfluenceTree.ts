@@ -138,6 +138,12 @@ export function resolveCrossLinks(
       crossLinks.push({ target, resolved: true, pageId });
       return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
     }
+    // v0.8.5 class 5: a wikilink to an EXCLUDED register (`[[risks]]`, `[[gap-analysis]]`) can never
+    // become a mirror page — rename it to its human phrase ("the risk register") instead of dropping to
+    // a bare alias (`risks`) or, worse, an alias that still carries a path (`risks.md (R-007)` → which B
+    // then mangled). Only for a NOT-included target (a real, mirrored page resolves via pageId / pending).
+    const phrase = included ? '' : humanizeRepoRef(target);
+    if (phrase) return phrase; // deliberate rename — not a cross-link, so no crossLinks entry
     if (reserveUnresolved && included) {
       // Reserve the masked-link slot so the translatable body is stable across passes.
       crossLinks.push({ target, resolved: false });
@@ -146,7 +152,29 @@ export function resolveCrossLinks(
     crossLinks.push({ target, resolved: false });
     return label;
   });
-  return { body, crossLinks };
+  // v0.8.5 class 6: also resolve a MARKDOWN-form cross-link `[label](NNNN-slug.md)` to a mirrored
+  // neighbour page — only `[[wikilinks]]` were resolved before, so a md-form link to a published ADR
+  // (e.g. `**Supersedes:** [ADR-0023](0023-…md)`) fell through to neutralizeRepoRelativeLinks and lost
+  // its hyperlink. Skips code/images/already-kept URLs; an excluded-register target → its phrase; a
+  // not-yet-mirrored target is left untouched for neutralizeRepoRelativeLinks to flatten (placeholder).
+  const linked = transformOutsideCode(body, (chunk) =>
+    chunk.replace(MD_LINK_RE, (m, mdLabel: string, url: string) => {
+      if (KEEP_LINK_URL.test(url)) return m;
+      const noAnchor = url.replace(/[#?].*$/, '');
+      if (!/\.md$/i.test(noAnchor)) return m; // only .md cross-links here
+      const base = noAnchor.replace(/^.*\//, '').replace(/\.md$/i, '');
+      const page = g.byBasename.get(base);
+      const pageId = page && includedSources.has(page.relPath) ? publishedMap.get(page.relPath) : undefined;
+      if (pageId) {
+        crossLinks.push({ target: base, resolved: true, pageId });
+        return `[${mdLabel}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+      }
+      // Not a mirrored page → leave the md-link for neutralizeRepoRelativeLinks to flatten to its
+      // author-chosen label (the placeholder rule); any path inside the label is cleaned by B downstream.
+      return m;
+    }),
+  );
+  return { body: linked, crossLinks };
 }
 
 /**
@@ -294,7 +322,7 @@ export function stripSourcesSection(content: string): { body: string; stripped: 
 // index.md) is itself a leak and must match too.
 const REPO_PATH_SRC =
   '(?:' +
-  '(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-]*' + // a path under (or the bare) repo root
+  '(?:\\.{1,2}/)*(?:raw|c4|\\.foam|docs/architecture)/[\\w./\\-*]*' + // a path under (or the bare) repo root; `*` so a glob `c4/src/*.c4` matches whole (v0.8.5 class 7)
   '|' +
   '[\\w./\\-]*[\\w\\-]\\.(?:c4|csv)\\b' + // a *.c4 / *.csv file (repo-internal extensions)
   '|' +
@@ -316,6 +344,55 @@ export function isRepoInternalPath(token: string): boolean {
   return REPO_PATH_ANCHORED_RE.test(token.trim());
 }
 
+const REGISTER_PHRASES: Readonly<Record<string, string>> = {
+  risks: 'the risk register',
+  'gap-analysis': 'the gap analysis',
+  kanban: 'the backlog',
+  glossary: 'the glossary',
+  'utility-tree': 'the utility tree',
+  claude: 'the schema contract',
+};
+
+/**
+ * Map a repo-internal reference (a path / register file / C4 source — as matched by REPO_PATH_RE or a
+ * wikilink/md-link target) to a human-readable phrase for the Confluence mirror. v0.8.5 DELETE→RENAME:
+ * deleting a path from prose left dangling verbs/connectives ("risk tracked in." / " directs …"); a
+ * deterministic rename keeps the sentence whole ("risk tracked in the risk register."). Returns `''`
+ * ONLY for a reference we deliberately drop (`.foam` IDE tooling) or an unrecognised token — the caller
+ * then deletes it (the old behaviour, no leak). Pure.
+ *
+ * Classified by KIND specificity, not directory: a `.c4`/`.csv` extension or a register basename wins
+ * over the enclosing `raw/` or `docs/architecture/` directory (so `raw/go-live.csv` → "the data file").
+ * A register name counts only as a bare top-level reference (`risks.md`, `[[risks]]`); the same name
+ * under a directory (`raw/risks.md`) is classified by its directory ("the source brief").
+ */
+export function humanizeRepoRef(token: string): string {
+  const base = token
+    .trim()
+    .replace(/^[`'"]+|[`'"]+$/g, '') // strip wrapping backticks/quotes
+    .replace(/[#?].*$/, '') // drop a #anchor / ?query
+    .replace(/\/+$/, '') // drop a trailing slash (bare root `c4/`)
+    .toLowerCase();
+  // C4 sources: a *.c4 file, anything under the c4/ tree, or a bare c4/ root → the model / a view.
+  if (/\.c4\b/.test(base) || /(?:^|\/)c4(?:\/|$)/.test(base)) {
+    // Left-anchored on `^`/`/` so the sub-type matches only the canonical FILENAME, not a substring of
+    // a longer basename (`reviews.c4` / `overview.c4` must be "the C4 model", not "the C4 views").
+    if (/(?:^|\/)views?\.c4\b/.test(base)) return 'the C4 views';
+    if (/(?:^|\/)deployment\.c4\b/.test(base)) return 'the C4 deployment view';
+    return 'the C4 model';
+  }
+  if (/\.csv\b/.test(base)) return 'the data file';
+  // Register / meta file referenced bare (top-level, no directory): `risks.md` / `[[risks]]`.
+  if (!base.includes('/')) {
+    const reg = REGISTER_PHRASES[base.replace(/\.md$/, '')];
+    if (reg) return reg;
+  }
+  if (/(?:^|\/)raw(?:\/|$)/.test(base)) return 'the source brief';
+  if (/(?:^|\/)\.foam(?:\/|$)/.test(base)) return ''; // IDE template store → drop
+  if (/(?:^|\/)docs\/architecture(?:\/|$)/.test(base)) return 'the architecture wiki';
+  return ''; // unrecognised repo ref → delete (no leak); should not occur given the allowlist
+}
+
 // A `**Source…:**` author field (NOT the QA-scenario `- **Source:** <actor>` 6-part field — that
 // one carries a domain value, not a path; it is left alone by the repo-path-value condition below).
 // Group 1 = the field LABEL (incl. list marker), group 2 = the VALUE — split so a value carrying a
@@ -325,10 +402,11 @@ const SOURCE_FIELD_RE = /^(\s*[-*]?\s*\*\*Source[^*\n]*:\*\*)(.*)$/i;
 /**
  * Curate `**Source…:**` provenance field lines whose VALUE cites the git source-of-truth (a
  * repo-internal path). Gating on the path VALUE (not the field label) keeps the QA-scenario
- * `- **Source:** user clicks…` field untouched (no path → not a leak). Cuts only the git path from the
- * value, KEEPING any non-git remainder (`- **Source:** GRM-3705 — sweepstakes strategy (raw/x.md)` →
- * `- **Source:** GRM-3705 — sweepstakes strategy`, gt feedback v0.8.3 minor); drops the whole line only
- * when nothing but the path was there. Fence-aware. Pure.
+ * `- **Source:** user clicks…` field untouched (no path → not a leak). RENAMES the git path to its
+ * human phrase via neutralizeRepoPaths (v0.8.5), KEEPING any non-git remainder:
+ * `- **Source:** docs/architecture/raw/TODO.md (2026-06)` → `- **Source:** the source brief (2026-06)`;
+ * `- **Source:** GRM-3705 — strategy (raw/x.md)` → `- **Source:** GRM-3705 — strategy (the source brief)`.
+ * Drops the whole line only when nothing alphanumeric remains (e.g. a `.foam/`-only value). Fence-aware. Pure.
  */
 export function stripSourceProvenanceLines(content: string): { body: string; stripped: boolean } {
   const lines = content.split('\n');
@@ -364,87 +442,58 @@ export function stripSourceProvenanceLines(content: string): { body: string; str
 // by design (acceptance tier ii), and a repo-ish tail like `…/src/x.c4` inside one must NOT be eaten.
 // B targets INLINE code + prose, so (unlike transformOutsideCode) it does NOT skip inline-code spans.
 const B_SKIP_RE = /~~~[\s\S]*?~~~|```[\s\S]*?```|\]\([^)\n]*\)|https?:\/\/[^\s)\]]+/g;
-// Provenance parenthetical that is PURELY a repo-path citation: `(from raw/…)`, `(see c4/src/x.c4)`,
-// `(source: `risks.md`)`. Anchored to keyword + the repo path + close-paren so an aside carrying real
-// prose (`(see also raw/y.md and other notes)`) is NOT wiped wholesale — step-4 strips just the path
-// there. The path may be wrapped in inline-code backticks (`(from `raw/x.md`)`) — the optional `` `? ``
-// around the path makes the whole parenthetical match so it is removed cleanly, instead of leaving a
-// dangling `(from):` after only the backticked span was cut (gt feedback v0.8.3 Defect 2).
-// Horizontal whitespace only (`[ \t]+`, NOT `\s+`): a provenance citation sits on one line, and `\s`
-// would let the match span a `\n` and swallow following lines/blank lines (review v0.8.3).
-const PROVENANCE_PAREN_RE = new RegExp(
-  '[ \\t]*\\((?:from|see|source):?[ \\t]+`?' + REPO_PATH_SRC + '`?[ \\t]*\\)',
-  'gi',
-);
-// A connective preposition/verb that introduces a repo-path citation in prose ("tracked in `risks.md`",
-// "see raw/x.md", "defined in c4/src/x.c4"). Dropping the connective TOGETHER with the path avoids a
-// dangling preposition before the punctuation (`risk tracked in.` — gt feedback v0.8.3 Defect 2). Each
-// only fires when IMMEDIATELY followed by a repo-path match (the strict allowlist gates it), so ordinary
-// prose is never touched: the only word ever removed is one that introduces a leak we already remove.
-const CONNECTIVE =
-  '(?:in|into|on|onto|at|to|of|for|from|via|per|under|within|with|by|see)';
-// Horizontal whitespace only (`[ \t]+`, NOT `\s+`): the connective + path sit on ONE line. `\s` would
-// span a `\n` and merge a connective ending one line/heading with a path opening the next, collapsing
-// the lines and deleting the blank line between them (review v0.8.3). A line-wrapped citation is rare
-// and degrades gracefully (the path is still removed by step 3/4; only the connective stays).
-const CONNECTIVE_PATH_RE = new RegExp('\\b' + CONNECTIVE + '[ \\t]+`?' + REPO_PATH_SRC + '`?', 'gi');
 // A provenance parenthetical emptied to just its keyword — collapsed in the tidy pass (belt-and-
-// suspenders for the rare case the path was not adjacent to the close-paren so PROVENANCE_PAREN_RE missed).
+// suspenders for the rare drop, e.g. a `.foam/` ref that humanizeRepoRef removes rather than renames).
 const EMPTY_PROVENANCE_PAREN_RE = /\((?:from|see|source):?[ \t]*\)/gi;
 const INLINE_CODE_SPAN_RE = /`[^`\n]+`/g;
 
 /**
- * Neutralise repo-internal path references that survive outside the `## Sources` section / `**Source:**`
- * fields (v0.8.2 B): provenance parentheticals (`(from raw/…)`), connective-introduced citations
- * (`tracked in `risks.md``), inline-code repo paths (`` `c4/src/x.c4` ``), and bare register/`.c4`/`.csv`
- * tokens / bare repo roots in prose/tables/headings. Skips fenced code (verbatim samples) AND markdown
- * link/image URLs (handled elsewhere — incl. the C4-diagram stub). Strict anchored allowlist → a C4 id /
- * domain term is never touched. Drops the reference (with the connective, if any, so no preposition is left
- * dangling) and tidies the gap (emptied parens, doubled spaces, space-before-punctuation). Pure; returns
- * body + touched.
+ * Rewrite repo-internal path references that survive outside the `## Sources` section / `**Source:**`
+ * fields into HUMAN PHRASES (v0.8.5 DELETE→RENAME): an inline-code repo path (`` `c4/src/x.c4` ``) or a
+ * bare register/`.c4`/`.csv`/repo-root token in prose/tables/headings becomes "the C4 model" / "the risk
+ * register" / … via `humanizeRepoRef`, so the surrounding sentence stays whole. Deleting the token (the
+ * pre-v0.8.5 behaviour) left dangling verbs/connectives ("risk tracked in." / " directs …") and stumps
+ * that the narrow v0.8.3 acceptance checks missed. There is no longer a separate connective/parenthetical
+ * step — the connective ("in"), the keyword ("from") and the parens all survive naturally once the path
+ * itself is renamed in place (`tracked in `risks.md`.` → `tracked in the risk register.`). A token that
+ * `humanizeRepoRef` maps to `''` (e.g. `.foam/`) is deleted, with the tidy pass cleaning the gap.
+ *
+ * Skips fenced code (verbatim samples), markdown link/image URLs `](…)` (handled by
+ * neutralizeRepoRelativeLinks / stubLocalImages) and bare http(s) URLs (external/POC evidence, tier ii).
+ * Strict anchored allowlist → a C4 id / domain term is never touched. Pure; returns body + touched.
  */
 export function neutralizeRepoPaths(content: string): { body: string; neutralized: boolean } {
   let neutralized = false;
   const body = transformOutsidePattern(content, B_SKIP_RE, (chunk) => {
     let s = chunk;
-    // 1. A parenthetical that is purely a repo-path citation (`(from raw/…)`, `(see `c4/x.c4`)`).
-    s = s.replace(PROVENANCE_PAREN_RE, () => {
-      neutralized = true; // the pattern already requires a repo-path citation
-      return '';
-    });
-    // 2. A connective introducing a repo path (`tracked in `risks.md``, `from raw/x.md`): drop connective
-    //    + path together so no dangling preposition is left before the punctuation (v0.8.3 Defect 2).
-    s = s.replace(CONNECTIVE_PATH_RE, () => {
-      neutralized = true;
-      return '';
-    });
-    // 3. A standalone inline-code repo path (`` `c4/src/x.c4` ``).
+    // 1. An inline-code repo path (`` `c4/src/x.c4` ``) → its human phrase (backticks gone).
     s = s.replace(INLINE_CODE_SPAN_RE, (m) => {
-      if (isRepoInternalPath(m.slice(1, -1))) {
+      const inner = m.slice(1, -1);
+      if (isRepoInternalPath(inner)) {
         neutralized = true;
-        return '';
+        return humanizeRepoRef(inner);
       }
       return m;
     });
-    // 4. A bare (non-code) repo path / register file / bare repo root in prose, tables, headings.
-    s = s.replace(REPO_PATH_RE, () => {
+    // 2. A bare (non-code) repo path / register file / bare repo root in prose, tables, headings.
+    s = s.replace(REPO_PATH_RE, (m) => {
       neutralized = true;
-      return '';
+      return humanizeRepoRef(m);
     });
-    // Only tidy a chunk that actually lost content — a clean chunk stays BYTE-IDENTICAL (so a page
-    // with no git paths never drifts), and a boundary space adjacent to a skipped URL/code span is
-    // preserved (no trailing-strip, which would eat it). Collapse an emptied provenance paren / empty
-    // parens, doubled spaces, and a space stranded before punctuation by a drop.
+    // Only tidy a chunk that actually changed — a clean chunk stays BYTE-IDENTICAL (so a page with no
+    // git paths never drifts), and a boundary space adjacent to a skipped URL/code span is preserved.
+    // The litter below is mostly residual from the rare drop (`''`) case; a rename leaves the sentence
+    // intact so little tidying is needed.
     if (s === chunk) return chunk;
     return s
-      .replace(EMPTY_PROVENANCE_PAREN_RE, '')
-      .replace(/\(\s*\)/g, '')
-      .replace(/[ \t]{2,}/g, ' ')
-      .replace(/[ \t]+([.,;:!?)])/g, '$1')
-      // Trailing whitespace a drop stranded before a newline (the body was per-line trimmed by
-      // normalizeBody upstream, so this only ever touches removal-introduced space — never a boundary
-      // space before a skipped URL/code span, which sits mid-line with no newline). v0.8.3.
-      .replace(/[ \t]+\n/g, '\n');
+      .replace(EMPTY_PROVENANCE_PAREN_RE, '') // `(from)` left by a dropped path
+      .replace(/\([ \t]*[,;][ \t]*/g, '(') // leading comma/semicolon just inside an open paren
+      .replace(/\([ \t]+/g, '(') // space just inside an open paren
+      .replace(/\([ \t]*\)/g, '') // empty parens
+      .replace(/([^.\n])\.[ \t]*\.(?!\.)/g, '$1.') // accidental double period (not an ellipsis)
+      .replace(/[ \t]{2,}/g, ' ') // doubled spaces
+      .replace(/[ \t]+([.,;:!?)])/g, '$1') // space stranded before punctuation
+      .replace(/[ \t]+\n/g, '\n'); // trailing whitespace before a newline
   });
   return { body, neutralized };
 }
@@ -479,19 +528,22 @@ const LOCAL_IMAGE_RE = /!\[([\s\S]*?)\]\((?!https?:)([^)\s]+)\)/g;
 /**
  * Replace local image embeds (`![alt](../c4/context.png)`) with a deterministic stub so the
  * mirror reflects WHERE a diagram belongs without a broken image — real C4/attachment
- * embedding is deferred (the Atlassian MCP exposes no upload tool). The `src` is wrapped in
- * inline code so the RU projection protects it byte-exact. Absolute (http/https) images and
- * code spans are left untouched. The placeholder is INLINE-safe (no leading `> ` blockquote
- * marker, which would land mid-line for an inline image and render a stray `>` — R5, v0.8).
- * Pure; returns the body + the stubbed sources (sorted, for warnings).
+ * embedding is deferred (the Atlassian MCP exposes no upload tool). The human descriptor is the
+ * image's ALT text (or, if absent, the humanised kind of its `src`, e.g. "the C4 model"); the raw
+ * repo `src` path is NOT emitted into the body — that path is git source-of-truth and would leak
+ * into the mirror AND into the RU-mask `restore` values (v0.8.5 no-leak; the `src` is still
+ * reported in `stubbed` for the operator warning). Absolute (http/https) images and code spans are
+ * left untouched. The placeholder is INLINE-safe (no leading `> ` blockquote marker, which would
+ * land mid-line for an inline image and render a stray `>` — R5, v0.8). Pure; returns the body +
+ * the stubbed sources (sorted, for warnings).
  */
 export function stubLocalImages(content: string): { body: string; stubbed: string[] } {
   const stubbed: string[] = [];
   const body = transformOutsideCode(content, (chunk) =>
     chunk.replace(LOCAL_IMAGE_RE, (_m, alt: string, src: string) => {
       stubbed.push(src);
-      const label = alt.trim() ? ` (${alt.trim()})` : '';
-      return `📐 C4 diagram placeholder — source \`${src}\`${label} _(attachment embedding pending)_`;
+      const descriptor = alt.trim() || humanizeRepoRef(src) || 'a diagram';
+      return `📐 C4 diagram placeholder — ${descriptor} _(attachment embedding pending)_`;
     }),
   );
   return { body, stubbed: [...new Set(stubbed)].sort((a, b) => a.localeCompare(b)) };

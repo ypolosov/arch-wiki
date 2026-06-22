@@ -30,24 +30,29 @@ across passes — pass 2 changes only the restore value, so you do **not** re-tr
 Note: repo-relative links (`../iterations/`, `CLAUDE.md`, `c4/…`) are **not** wiki cross-links and are
 neutralized to plain text by Core (they would be dead hrefs in Confluence); `data.pages[].warnings` lists them.
 The mirror is a **curated projection**, not a byte copy — the git source-of-truth never reaches Confluence.
-Core removes, before the content hash: the `## Sources` provenance section; the repo-path part of `**Source:**`
-author fields (keeping any non-git remainder — a Jira ref / attribution — and dropping the line only when
-nothing else is left); and repo-internal path references in prose/code/parentheticals (`raw/…`,
-`docs/architecture/…`, `c4/src/*.c4`, `.foam/…`, bare repo roots `c4/`/`raw/`, register files like
-`risks.md`/`glossary.md`, `*.csv`). A provenance parenthetical (`(from raw/…)`) and a connective that
-introduces a path (`tracked in \`risks.md\``) are removed *with* their keyword/preposition so no dangling
-`(from):` or `… in.` is left behind. The `CLAUDE.md` Layer-3 meta-doc is excluded entirely.
+Core removes, before the content hash: the `## Sources` provenance section, and `CLAUDE.md` (the Layer-3
+meta-doc) is excluded entirely. Every other repo-internal git reference is **RENAMED in place to a human
+phrase** (v0.8.5 DELETE→RENAME), not deleted — deleting a path from prose left dangling verbs/connectives
+(`risk tracked in.`) and broken asides; a rename keeps the sentence whole. The deterministic map
+(`humanizeRepoRef`): `risks.md`→"the risk register", `gap-analysis`→"the gap analysis", `kanban`→"the
+backlog", `glossary`→"the glossary", `utility-tree`→"the utility tree", `c4/src/model.c4` (or a bare `c4/`
+or a glob `c4/src/*.c4`)→"the C4 model" (`views.c4`→"the C4 views", `deployment.c4`→"the C4 deployment
+view"), `raw/…`→"the source brief", `*.csv`→"the data file", `docs/architecture/…`→"the architecture wiki",
+`CLAUDE.md`→"the schema contract"; `.foam/…` is dropped. This applies in prose, inline code, parentheticals
+(`(from raw/x)`→`(from the source brief)`), connective citations (`tracked in \`risks.md\``→`tracked in the
+risk register`), `**Source:**` fields (the git path is renamed, any non-git remainder — Jira ref /
+attribution — kept), and a wikilink to an excluded register (`[[risks]]`→"the risk register").
 `data.pages[].warnings` lists each curation. The curation runs in pipeline order **after** cross-link
 resolution + repo-relative-link neutralisation (so a link whose label is itself a path, `[c4/src/x.c4](…)`,
-is removed whole — no broken empty link) and **before** the C4-image stub (so the stub keeps its diagram
-`source` path). **Acceptance has two tiers:** (i) repo-internal source paths MUST be absent; (ii) external/POC
-git URLs in ADRs (`bitbucket.org/…`, `git.shakuro.com`) are decision-evidence and are **kept by design** —
-they are not KB provenance. The path matcher is a strict anchored allowlist with a left word-boundary, so C4
-element ids (`product.gaming.brand.core.service`), domain terms and words merely containing a root (`draw/`)
-are never touched. A filename/domain-like neutralized label (`CLAUDE.md`) is wrapped in inline code so
-Confluence does not auto-link it to a dead `http://CLAUDE.md`. (A bare repo root that was the sole content of
-a table cell or list bullet leaves that cell/bullet empty — valid but blank; the repo-structure table in
-`index.md` is the typical case.)
+is collapsed and renamed — no broken empty link) and **before** the C4-image stub (so the stub keeps its
+diagram `source` path). A markdown-form cross-link to a mirrored neighbour (`[ADR-0023](0023-…md)`) is
+resolved to its `/wiki` page (not only `[[wikilinks]]`). **Acceptance has two tiers:** (i) repo-internal
+source paths MUST be absent (from the body AND from the RU-mask `restore` values); (ii) external/POC git URLs
+in ADRs (`bitbucket.org/…`, `git.shakuro.com`) are decision-evidence and are **kept by design**. The path
+matcher is a strict anchored allowlist with a left word-boundary, so C4 element ids
+(`product.gaming.brand.core.service`), domain terms and words merely containing a root (`draw/`) are never
+touched. (A bare repo root that was the sole content of a table cell or list bullet renames to its phrase;
+the repo-structure table in `index.md` is the typical case.)
 
 **Incremental publish:** `render-confluence --page <relPath>` emits the target page **plus its full ancestor
 chain** (parent-first), so you can publish one branch and still create parents before children — the mirror
