@@ -9345,7 +9345,7 @@ var DEFAULT_EXCLUDE = {
   // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
   basenames: ["risks", "gap-analysis", "kanban", "CLAUDE"]
 };
-var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]/g;
 function isPageExcluded(page, exclude) {
   const fm = page.frontmatter;
   if (fm.confluence === true) return false;
@@ -9385,24 +9385,35 @@ function sortParentFirst(relPaths, parents) {
 var PENDING_PAGE_ID = "pending";
 function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey, reserveUnresolved = false) {
   const crossLinks = [];
-  const body = content.replace(WIKILINK_RE, (_m, _bang, target, alias) => {
-    const label = (alias ?? target).trim();
-    const page = g.byBasename.get(target);
-    const included = page ? includedSources.has(page.relPath) : false;
-    const pageId = included ? publishedMap.get(page.relPath) : void 0;
-    if (pageId) {
-      crossLinks.push({ target, resolved: true, pageId });
-      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
-    }
-    const phrase = included ? "" : humanizeRepoRef(target);
-    if (phrase) return phrase;
-    if (reserveUnresolved && included) {
+  let renamed = false;
+  const body = content.replace(
+    WIKILINK_RE,
+    (_m, _bang, target, anchor, alias) => {
+      const label = (alias ?? target).trim();
+      const page = g.byBasename.get(target);
+      const included = page ? includedSources.has(page.relPath) : false;
+      const pageId = included ? publishedMap.get(page.relPath) : void 0;
+      if (pageId) {
+        crossLinks.push({ target, resolved: true, pageId });
+        return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+      }
+      const phrase = included ? "" : humanizeRepoRef(target);
+      if (phrase) {
+        renamed = true;
+        const aliasId = alias?.trim() ?? "";
+        if (RECORD_ID_RE.test(aliasId)) return aliasId;
+        const anchorId = (anchor ?? "").replace(/^\^/, "").trim();
+        if (RECORD_ID_RE.test(anchorId)) return anchorId;
+        return phrase;
+      }
+      if (reserveUnresolved && included) {
+        crossLinks.push({ target, resolved: false });
+        return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
+      }
       crossLinks.push({ target, resolved: false });
-      return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
+      return label;
     }
-    crossLinks.push({ target, resolved: false });
-    return label;
-  });
+  );
   const linked = transformOutsideCode(
     body,
     (chunk) => chunk.replace(MD_LINK_RE, (m, mdLabel, url) => {
@@ -9419,7 +9430,7 @@ function resolveCrossLinks(content, g, publishedMap, includedSources, spaceKey, 
       return m;
     })
   );
-  return { body: linked, crossLinks };
+  return { body: renamed ? tidyRenamedPhrases(linked) : linked, crossLinks };
 }
 function splitTitle(title) {
   const m = /^\s*([A-Za-z]+-\d+\S*:)\s*(.*)$/.exec(title);
@@ -9452,7 +9463,8 @@ function neutralizeRepoRelativeLinks(content) {
     (chunk) => chunk.replace(MD_LINK_RE, (m, label, url) => {
       if (KEEP_LINK_URL.test(url)) return m;
       stripped.push(url);
-      return protectAutolinkLabel(label);
+      const lbl = /^[\w-]+\/$/.test(label) ? label.slice(0, -1) : label;
+      return protectAutolinkLabel(lbl);
     })
   );
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
@@ -9507,7 +9519,10 @@ var REGISTER_PHRASES = {
   kanban: "the backlog",
   glossary: "the glossary",
   "utility-tree": "the utility tree",
-  claude: "the schema contract"
+  // "the contributor guide" (NOT "the schema contract", v0.8.6): CLAUDE.md is the schema/contributor
+  // doc, and renaming it to "schema contract" collided with prose that already says "schema contract"
+  // (`the schema contract lives in the schema contract`).
+  claude: "the contributor guide"
 };
 function humanizeRepoRef(token) {
   const base = token.trim().replace(/^[`'"]+|[`'"]+$/g, "").replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
@@ -9525,6 +9540,28 @@ function humanizeRepoRef(token) {
   if (/(?:^|\/)\.foam(?:\/|$)/.test(base)) return "";
   if (/(?:^|\/)docs\/architecture(?:\/|$)/.test(base)) return "the architecture wiki";
   return "";
+}
+var RECORD_ID_RE = /^[A-Za-z]{1,4}-\d+$/;
+var REPO_PHRASES = [
+  "the risk register",
+  "the gap analysis",
+  "the backlog",
+  "the glossary",
+  "the utility tree",
+  "the C4 deployment view",
+  "the C4 views",
+  "the C4 model",
+  "the source brief",
+  "the data file",
+  "the architecture wiki",
+  "the contributor guide"
+];
+var PHRASE_ALT = REPO_PHRASES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+var ADJACENT_PHRASE_RE = new RegExp(`(${PHRASE_ALT})(?:[ \\t]*[\\/,;][ \\t]*\\1\\b)+`, "g");
+var DOUBLE_THE_RE = /\b([Tt]he)[ \t]+the\b/g;
+var INDEF_THE_RE = /\b([Aa])n?[ \t]+the\b/g;
+function tidyRenamedPhrases(s) {
+  return s.replace(DOUBLE_THE_RE, "$1").replace(INDEF_THE_RE, (_m, a) => a === "A" ? "The" : "the").replace(ADJACENT_PHRASE_RE, "$1");
 }
 var SOURCE_FIELD_RE = /^(\s*[-*]?\s*\*\*Source[^*\n]*:\*\*)(.*)$/i;
 function stripSourceProvenanceLines(content) {
@@ -9572,7 +9609,7 @@ function neutralizeRepoPaths(content) {
       return humanizeRepoRef(m);
     });
     if (s === chunk) return chunk;
-    return s.replace(EMPTY_PROVENANCE_PAREN_RE, "").replace(/\([ \t]*[,;][ \t]*/g, "(").replace(/\([ \t]+/g, "(").replace(/\([ \t]*\)/g, "").replace(/([^.\n])\.[ \t]*\.(?!\.)/g, "$1.").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1").replace(/[ \t]+\n/g, "\n");
+    return tidyRenamedPhrases(s).replace(EMPTY_PROVENANCE_PAREN_RE, "").replace(/\([ \t]*[,;][ \t]*/g, "(").replace(/\([ \t]+/g, "(").replace(/\([ \t]*\)/g, "").replace(/([^.\n])\.[ \t]*\.(?!\.)/g, "$1.").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,;:!?)])/g, "$1").replace(/[ \t]+\n/g, "\n");
   });
   return { body, neutralized };
 }
@@ -10948,7 +10985,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.5";
+var PLUGIN_VERSION = "0.8.6";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

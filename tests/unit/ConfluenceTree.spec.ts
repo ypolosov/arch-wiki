@@ -14,6 +14,7 @@ import {
   protectStructuralSpans,
   isRepoInternalPath,
   humanizeRepoRef,
+  tidyRenamedPhrases,
   neutralizeRepoPaths,
   resolveCrossLinks,
   sortParentFirst,
@@ -115,9 +116,10 @@ describe('ConfluenceTree.resolveCrossLinks', () => {
     ]);
   });
 
-  it('renames an EXCLUDED-register wikilink to its human phrase, discarding a path-bearing alias (v0.8.5 class 5)', () => {
-    // risks/gap-analysis are excluded from the mirror → can never be a page; rename, do not drop to a
-    // bare `risks` (or an alias that still carries `risks.md (R-007)` → which B then mangled to `( (R-007))`).
+  it('renames a bare register wikilink to its phrase but PRESERVES a record-id anchor (v0.8.5/0.8.6 class 5)', () => {
+    // risks/gap-analysis are excluded → can never be a page. A bare [[risks]] → the phrase; an anchored
+    // [[risks#^R-007|…]] → the record-id "R-007" (v0.8.6: keep traceability + grammar), discarding the
+    // path-bearing alias so `risks.md` never leaks.
     const g = buildGraph([page('drivers/quality-attributes/QA-001.md')]); // risks NOT in graph/included
     const included = new Set(['drivers/quality-attributes/QA-001.md']);
     const { body, crossLinks } = resolveCrossLinks(
@@ -127,7 +129,8 @@ describe('ConfluenceTree.resolveCrossLinks', () => {
       included,
       'PP',
     );
-    expect(body).toBe('Tracked (see the risk register) and the risk register applies; ghost ghost.');
+    expect(body).toBe('Tracked (see the risk register) and R-007 applies; ghost ghost.');
+    expect(body).not.toContain('risks.md'); // the path-bearing alias is discarded (no leak)
     // a deliberate register rename is not logged as a cross-link; only the genuine unresolved `ghost` is.
     expect(crossLinks).toEqual([{ target: 'ghost', resolved: false }]);
   });
@@ -171,6 +174,60 @@ describe('ConfluenceTree.resolveCrossLinks reserveUnresolved (RU stability, v0.7
     const pass2 = resolveCrossLinks('x [[b]] y', g, new Map([['b.md', '42']]), included, 'PP', true).body;
     // The translator sees identical masked text → the page need not be re-translated on pass 2.
     expect(protectStructuralSpans(pass1).masked).toBe(protectStructuralSpans(pass2).masked);
+  });
+});
+
+describe('ConfluenceTree.resolveCrossLinks v0.8.6 — register anchor/alias keeps the record-id', () => {
+  const g = buildGraph([page('drivers/quality-attributes/QA-001.md')]); // risks excluded / not in graph
+  const included = new Set(['drivers/quality-attributes/QA-001.md']);
+  const run = (s: string) => resolveCrossLinks(s, g, new Map(), included, 'PP').body;
+
+  it('prefers an id-shaped alias / anchor id over the generic register name (grammar + traceability)', () => {
+    expect(run('Resolves [[risks#^C-003|C-003]].')).toBe('Resolves C-003.');
+    expect(run('([[risks#^Q-003|Q-003]] resolved)')).toBe('(Q-003 resolved)');
+    expect(run('the recorded contradiction [[risks#^C-003|C-003]]')).toBe('the recorded contradiction C-003');
+    expect(run('Anchor only [[risks#^R-012]] here')).toBe('Anchor only R-012 here'); // anchor, no alias
+  });
+
+  it('a BARE register wikilink (no id) still renders the human phrase (no regression)', () => {
+    expect(run('Recorded in [[risks]].')).toBe('Recorded in the risk register.');
+    expect(run('(see [[risks]])')).toBe('(see the risk register)');
+  });
+
+  it('collapses a duplicated article from a register rename (no "the the")', () => {
+    expect(run('Listed in the [[kanban|Architecture Backlog]].')).toBe('Listed in the backlog.');
+    expect(run('See the [[gap-analysis|gaps]] page.')).toBe('See the gap analysis page.');
+  });
+
+  it('replaces an indefinite article before a register rename (no "an risk register") (v0.8.6 review)', () => {
+    expect(run('It is a [[risks]] entry.')).toBe('It is the risk register entry.');
+    expect(run('See an [[utility-tree]] node.')).toBe('See the utility tree node.');
+  });
+
+  it('three different anchors stay three different ids (no adjacent-repeat collapse)', () => {
+    expect(run('([[risks#^C-010|C-010]]/[[risks#^R-015|R-015]]/[[risks#^Q-003|Q-003]])')).toBe(
+      '(C-010/R-015/Q-003)',
+    );
+  });
+});
+
+describe('ConfluenceTree.tidyRenamedPhrases (v0.8.6)', () => {
+  it('drops a duplicated article and collapses an adjacent identical phrase', () => {
+    expect(tidyRenamedPhrases('in the the backlog')).toBe('in the backlog');
+    expect(tidyRenamedPhrases('The the gap analysis')).toBe('The gap analysis');
+    expect(tidyRenamedPhrases('the source brief, the source brief')).toBe('the source brief');
+    expect(tidyRenamedPhrases('the C4 model / the C4 model')).toBe('the C4 model');
+  });
+
+  it('replaces an indefinite article before an inserted definite phrase (no "an risk register") (v0.8.6 review)', () => {
+    expect(tidyRenamedPhrases('It is a the risk register entry')).toBe('It is the risk register entry');
+    expect(tidyRenamedPhrases('See an the C4 model now')).toBe('See the C4 model now');
+    expect(tidyRenamedPhrases('An the source brief')).toBe('The source brief'); // sentence-start capital kept
+  });
+
+  it('leaves DIFFERENT adjacent phrases and ordinary prose untouched', () => {
+    expect(tidyRenamedPhrases('the risk register and the gap analysis')).toBe('the risk register and the gap analysis');
+    expect(tidyRenamedPhrases('the theory of the case')).toBe('the theory of the case'); // not "the the"
   });
 });
 
@@ -231,6 +288,12 @@ describe('ConfluenceTree.neutralizeRepoRelativeLinks (v0.7)', () => {
     expect(neutralizeRepoRelativeLinks('Edit [config.json](./c.json).').body).toBe('Edit `config.json`.');
     // a label with spaces (not filename-like) is left as plain text
     expect(neutralizeRepoRelativeLinks('See [the notes](../n.md).').body).toBe('See the notes.');
+  });
+
+  it('drops a trailing-slash path fragment from a bare wiki-directory label (v0.8.6 index.md residual)', () => {
+    expect(neutralizeRepoRelativeLinks('Lives in [iterations/](iterations/).').body).toBe('Lives in iterations.');
+    // a non-slash dir label is unaffected (existing behaviour)
+    expect(neutralizeRepoRelativeLinks('See [iterations](../iterations/).').body).toBe('See iterations.');
   });
 });
 
@@ -323,7 +386,7 @@ describe('ConfluenceTree.humanizeRepoRef (v0.8.5 — DELETE→RENAME map)', () =
       ['kanban', 'the backlog'],
       ['glossary.md', 'the glossary'],
       ['utility-tree', 'the utility tree'],
-      ['CLAUDE.md', 'the schema contract'],
+      ['CLAUDE.md', 'the contributor guide'],
       ['c4/src/model.c4', 'the C4 model'],
       ['c4/src/views.c4', 'the C4 views'],
       ['c4/src/deployment.c4', 'the C4 deployment view'],
@@ -413,6 +476,14 @@ describe('ConfluenceTree.neutralizeRepoPaths (v0.8.2 B)', () => {
     expect(r.body).toBe('LikeC4 sources in the C4 model, validated via `npm run validate`.');
     expect(r.body).not.toContain('*.c4'); // no orphaned glob tail
     expect((r.body.match(/`/g) ?? []).length).toBe(2); // exactly the surviving `npm run validate` span — no unpaired backtick
+  });
+
+  it('cleans the rename seams: no "the the", no adjacent-repeat, no CLAUDE tautology (v0.8.6)', () => {
+    expect(neutralizeRepoPaths('Listed in the `kanban.md` today.').body).toBe('Listed in the backlog today.');
+    expect(neutralizeRepoPaths('Sources: raw/a.md, raw/b.md done.').body).toBe('Sources: the source brief done.');
+    expect(neutralizeRepoPaths('The schema contract lives in CLAUDE.md here.').body).toBe(
+      'The schema contract lives in the contributor guide here.',
+    );
   });
 
   it('does NOT touch a C4 element id or a fenced code sample (no false positives)', () => {

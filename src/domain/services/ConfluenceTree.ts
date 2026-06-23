@@ -31,7 +31,10 @@ export interface CrossLink {
 }
 
 // Mirrors WikilinkScanner's pattern: [[target]] / [[target#anchor|alias]] / ![[embed]].
-const WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+// Groups: 1=bang, 2=target, 3=anchor (without the #, e.g. `^C-003`), 4=alias. The anchor is captured
+// (v0.8.6) so an excluded-register link can preserve its record-id (`#^C-003`) instead of collapsing to
+// the generic register name.
+const WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]/g;
 
 /**
  * Visibility filter (plan §12.10 Decision A). A page is excluded from the mirror
@@ -129,29 +132,43 @@ export function resolveCrossLinks(
   reserveUnresolved = false,
 ): { body: string; crossLinks: CrossLink[] } {
   const crossLinks: CrossLink[] = [];
-  const body = content.replace(WIKILINK_RE, (_m, _bang, target: string, alias?: string) => {
-    const label = (alias ?? target).trim();
-    const page = g.byBasename.get(target);
-    const included = page ? includedSources.has(page.relPath) : false;
-    const pageId = included ? publishedMap.get(page!.relPath) : undefined;
-    if (pageId) {
-      crossLinks.push({ target, resolved: true, pageId });
-      return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
-    }
-    // v0.8.5 class 5: a wikilink to an EXCLUDED register (`[[risks]]`, `[[gap-analysis]]`) can never
-    // become a mirror page — rename it to its human phrase ("the risk register") instead of dropping to
-    // a bare alias (`risks`) or, worse, an alias that still carries a path (`risks.md (R-007)` → which B
-    // then mangled). Only for a NOT-included target (a real, mirrored page resolves via pageId / pending).
-    const phrase = included ? '' : humanizeRepoRef(target);
-    if (phrase) return phrase; // deliberate rename — not a cross-link, so no crossLinks entry
-    if (reserveUnresolved && included) {
-      // Reserve the masked-link slot so the translatable body is stable across passes.
+  let renamed = false; // a register phrase / id was substituted → run the seam tidy (no-drift gate)
+  const body = content.replace(
+    WIKILINK_RE,
+    (_m, _bang, target: string, anchor?: string, alias?: string) => {
+      const label = (alias ?? target).trim();
+      const page = g.byBasename.get(target);
+      const included = page ? includedSources.has(page.relPath) : false;
+      const pageId = included ? publishedMap.get(page!.relPath) : undefined;
+      if (pageId) {
+        crossLinks.push({ target, resolved: true, pageId });
+        return `[${label}](/wiki/spaces/${spaceKey}/pages/${pageId})`;
+      }
+      // v0.8.5 class 5: a wikilink to an EXCLUDED register (`[[risks]]`, `[[gap-analysis]]`) can never
+      // become a mirror page — rename it to its human phrase ("the risk register") instead of dropping to
+      // a bare alias (`risks`) or an alias that still carries a path. Only for a NOT-included target.
+      const phrase = included ? '' : humanizeRepoRef(target);
+      if (phrase) {
+        renamed = true;
+        // v0.8.6: when the link carries a record id — an id-shaped alias (`|C-003`) or an anchor
+        // (`#^C-003`) — PREFER that id over the generic register name, so `Resolves [[risks#^C-003|C-003]]`
+        // → `Resolves C-003` (grammatical + keeps traceability), not `Resolves the risk register`. A bare
+        // `[[risks]]` (no id) still renders the phrase.
+        const aliasId = alias?.trim() ?? '';
+        if (RECORD_ID_RE.test(aliasId)) return aliasId;
+        const anchorId = (anchor ?? '').replace(/^\^/, '').trim();
+        if (RECORD_ID_RE.test(anchorId)) return anchorId;
+        return phrase; // deliberate rename — not a cross-link, so no crossLinks entry
+      }
+      if (reserveUnresolved && included) {
+        // Reserve the masked-link slot so the translatable body is stable across passes.
+        crossLinks.push({ target, resolved: false });
+        return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
+      }
       crossLinks.push({ target, resolved: false });
-      return `[${label}](/wiki/spaces/${spaceKey}/pages/${PENDING_PAGE_ID})`;
-    }
-    crossLinks.push({ target, resolved: false });
-    return label;
-  });
+      return label;
+    },
+  );
   // v0.8.5 class 6: also resolve a MARKDOWN-form cross-link `[label](NNNN-slug.md)` to a mirrored
   // neighbour page — only `[[wikilinks]]` were resolved before, so a md-form link to a published ADR
   // (e.g. `**Supersedes:** [ADR-0023](0023-…md)`) fell through to neutralizeRepoRelativeLinks and lost
@@ -174,7 +191,9 @@ export function resolveCrossLinks(
       return m;
     }),
   );
-  return { body: linked, crossLinks };
+  // v0.8.6: clean the seams a register rename left (duplicated article `the the`, adjacent identical
+  // phrase). Gated on `renamed` so a page with no register rename is returned byte-identical (no drift).
+  return { body: renamed ? tidyRenamedPhrases(linked) : linked, crossLinks };
 }
 
 /**
@@ -250,7 +269,11 @@ export function neutralizeRepoRelativeLinks(content: string): { body: string; st
     chunk.replace(MD_LINK_RE, (m, label: string, url: string) => {
       if (KEEP_LINK_URL.test(url)) return m;
       stripped.push(url);
-      return protectAutolinkLabel(label);
+      // A bare wiki-directory label keeps a trailing-slash path fragment when its dead link is stripped
+      // (`[iterations/](iterations/)` → `iterations/`). Drop the slash so it reads as a plain word
+      // (`iterations`), not a path leftover (v0.8.6 index.md residual).
+      const lbl = /^[\w-]+\/$/.test(label) ? label.slice(0, -1) : label;
+      return protectAutolinkLabel(lbl);
     }),
   );
   return { body, stripped: [...new Set(stripped)].sort((a, b) => a.localeCompare(b)) };
@@ -350,7 +373,10 @@ const REGISTER_PHRASES: Readonly<Record<string, string>> = {
   kanban: 'the backlog',
   glossary: 'the glossary',
   'utility-tree': 'the utility tree',
-  claude: 'the schema contract',
+  // "the contributor guide" (NOT "the schema contract", v0.8.6): CLAUDE.md is the schema/contributor
+  // doc, and renaming it to "schema contract" collided with prose that already says "schema contract"
+  // (`the schema contract lives in the schema contract`).
+  claude: 'the contributor guide',
 };
 
 /**
@@ -391,6 +417,53 @@ export function humanizeRepoRef(token: string): string {
   if (/(?:^|\/)\.foam(?:\/|$)/.test(base)) return ''; // IDE template store → drop
   if (/(?:^|\/)docs\/architecture(?:\/|$)/.test(base)) return 'the architecture wiki';
   return ''; // unrecognised repo ref → delete (no leak); should not occur given the allowlist
+}
+
+// A record id such as `C-003` / `Q-012` / `R-7` / `ADR-0049` — used to PRESERVE the id when an excluded
+// register wikilink carries it as an anchor (`#^C-003`) or an id-shaped alias (v0.8.6).
+const RECORD_ID_RE = /^[A-Za-z]{1,4}-\d+$/;
+
+// The closed vocabulary humanizeRepoRef can emit (every value of the map). Used to collapse an
+// adjacent-repeat of the SAME phrase that naive rename produced (`the source brief, the source brief`
+// from `raw/A, raw/B`) — bounded to this set so ordinary prose repetition is never touched. v0.8.6.
+const REPO_PHRASES: readonly string[] = [
+  'the risk register',
+  'the gap analysis',
+  'the backlog',
+  'the glossary',
+  'the utility tree',
+  'the C4 deployment view',
+  'the C4 views',
+  'the C4 model',
+  'the source brief',
+  'the data file',
+  'the architecture wiki',
+  'the contributor guide',
+];
+const PHRASE_ALT = REPO_PHRASES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+// Adjacent identical phrase separated only by ` / , ;` → collapse to one (`\1` requires identical).
+const ADJACENT_PHRASE_RE = new RegExp(`(${PHRASE_ALT})(?:[ \\t]*[\\/,;][ \\t]*\\1\\b)+`, 'g');
+// A duplicated DEFINITE article left by inserting a "the …" phrase right after an existing "the"
+// (`in the [[kanban|…]]` → `in the the backlog`). Keep one "the" (its case), drop the duplicate.
+const DOUBLE_THE_RE = /\b([Tt]he)[ \t]+the\b/g;
+// An INDEFINITE article ("a"/"an") immediately before an inserted "the …" phrase (`a [[risks]]` →
+// `a the risk register`). Keeping "a"/"an" is wrong — "a risk register" loses the definite sense and
+// "an risk register" is broken English — so DROP the indefinite article and keep the phrase's "the"
+// (preserving sentence-start capitalisation). v0.8.6 review.
+const INDEF_THE_RE = /\b([Aa])n?[ \t]+the\b/g;
+
+/**
+ * Clean the two seams a naive in-place rename can leave when a "the …" phrase is substituted into prose
+ * (v0.8.6): a duplicated leading article (`the the backlog` → `the backlog`) and an adjacent repeat of
+ * the SAME phrase from two different refs (`the source brief, the source brief` → `the source brief`).
+ * Bounded to the closed REPO_PHRASES vocabulary, so genuine prose is untouched. Callers apply it ONLY to
+ * a string that actually received a rename (preserving the no-false-drift invariant). Pure.
+ */
+export function tidyRenamedPhrases(s: string): string {
+  return s
+    .replace(DOUBLE_THE_RE, '$1') // "the the X" → "the X"
+    .replace(INDEF_THE_RE, (_m, a) => (a === 'A' ? 'The' : 'the')) // "a/an the X" → "the X"
+    .replace(ADJACENT_PHRASE_RE, '$1'); // "the X, the X" → "the X"
 }
 
 // A `**Source…:**` author field (NOT the QA-scenario `- **Source:** <actor>` 6-part field — that
@@ -485,7 +558,7 @@ export function neutralizeRepoPaths(content: string): { body: string; neutralize
     // The litter below is mostly residual from the rare drop (`''`) case; a rename leaves the sentence
     // intact so little tidying is needed.
     if (s === chunk) return chunk;
-    return s
+    return tidyRenamedPhrases(s) // v0.8.6: `the the backlog` / `the source brief, the source brief`
       .replace(EMPTY_PROVENANCE_PAREN_RE, '') // `(from)` left by a dropped path
       .replace(/\([ \t]*[,;][ \t]*/g, '(') // leading comma/semicolon just inside an open paren
       .replace(/\([ \t]+/g, '(') // space just inside an open paren

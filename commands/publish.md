@@ -38,10 +38,14 @@ phrase** (v0.8.5 DELETE→RENAME), not deleted — deleting a path from prose le
 backlog", `glossary`→"the glossary", `utility-tree`→"the utility tree", `c4/src/model.c4` (or a bare `c4/`
 or a glob `c4/src/*.c4`)→"the C4 model" (`views.c4`→"the C4 views", `deployment.c4`→"the C4 deployment
 view"), `raw/…`→"the source brief", `*.csv`→"the data file", `docs/architecture/…`→"the architecture wiki",
-`CLAUDE.md`→"the schema contract"; `.foam/…` is dropped. This applies in prose, inline code, parentheticals
+`CLAUDE.md`→"the contributor guide"; `.foam/…` is dropped. This applies in prose, inline code, parentheticals
 (`(from raw/x)`→`(from the source brief)`), connective citations (`tracked in \`risks.md\``→`tracked in the
 risk register`), `**Source:**` fields (the git path is renamed, any non-git remainder — Jira ref /
-attribution — kept), and a wikilink to an excluded register (`[[risks]]`→"the risk register").
+attribution — kept), and a wikilink to an excluded register (`[[risks]]`→"the risk register"). A register
+wikilink that carries a **record id** — an id-shaped alias or an anchor (`[[risks#^C-003|C-003]]`) — keeps
+that id (`C-003`) instead of the generic name, so traceability and grammar survive (`Resolves C-003`, not
+`Resolves the risk register`). Rename seams are cleaned: a duplicated article (`the the backlog`) and an
+adjacent repeat of the same phrase (`the source brief, the source brief`) collapse to one (v0.8.6).
 `data.pages[].warnings` lists each curation. The curation runs in pipeline order **after** cross-link
 resolution + repo-relative-link neutralisation (so a link whose label is itself a path, `[c4/src/x.c4](…)`,
 is collapsed and renamed — no broken empty link) and **before** the C4-image stub (so the stub keeps its

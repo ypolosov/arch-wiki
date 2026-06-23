@@ -396,6 +396,29 @@ describe('renderConfluencePayload + recordPage (integration)', () => {
     expect(restored).toContain('the risk register');
   });
 
+  it('v0.8.6: register anchor keeps the record-id end-to-end (RU), no "the the", id consistent with prose', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'adrs/0038-resolve.md'),
+      '---\ntype: adr\nstatus: accepted\n---\n# ADR-0038: Resolve\n\n' +
+        'Resolves [[risks#^C-003|C-003]] and ([[risks#^Q-003|Q-003]] resolved).\n\n' +
+        'Listed in the [[kanban|Architecture Backlog]]; C-003 is also referenced in prose.\n',
+    );
+    const ruCfg = ProjectConfig.from(
+      ProjectConfigSchema.parse({ integrations: { confluence: { space: 'PP', language: 'ru' } } }),
+    );
+    const plan = await renderConfluencePayload({ ...deps(root), config: ruCfg });
+    const adr = plan.pages.find((p) => p.basename === '0038-resolve')!;
+    const { body: restored } = applyRestore(adr.body, adr.restore);
+    expect(restored).toContain('Resolves C-003 and (Q-003 resolved).'); // record-ids preserved
+    expect(restored).toContain('Listed in the backlog;'); // no "the the"
+    expect(restored).not.toMatch(/the the\b/);
+    expect(restored).not.toContain('the risk register'); // id preferred over the generic name here
+    // the in-prose plain-text "C-003" now matches the (formerly dangling) link → consistent
+    expect((restored.match(/C-003/g) ?? []).length).toBe(2);
+  });
+
   it('v0.8: a plain page (no realized_by / no image) keeps a single-newline English body (byte-stable upgrade)', async () => {
     const root = await tmpRoot();
     const sys = new NodeFileSystem();
