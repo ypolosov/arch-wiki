@@ -11183,7 +11183,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.8.6";
+var PLUGIN_VERSION = "0.9.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
