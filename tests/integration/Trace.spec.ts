@@ -47,6 +47,8 @@ describe('trace (integration)', () => {
     expect(r.raw).toEqual([{ raw: 'raw/notes.md', exists: true }]);
     expect(r.adrs).toEqual(['0012-caching']);
     expect(r.issues).toEqual([{ key: 'GRM-431', system: 'jira', stale: false }]);
+    // Live-covered by accepted ADR-0012; no realized_by frontmatter → L1 (FPF B.3.3).
+    expect(r.assuranceLevel).toBe('L1');
   });
 
   it('flags a missing raw source (exists:false) without throwing', async () => {

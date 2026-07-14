@@ -2,6 +2,7 @@ import { DomainError } from '../../domain/errors';
 import { ArtifactKind } from '../../domain/model/ArtifactType';
 import { buildGraph, pagesOfKind } from '../../domain/model/Graph';
 import { kindOfPage } from '../../domain/model/WikiPage';
+import { AssuranceLevel, computeAssurance } from '../../domain/services/Assurance';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
@@ -31,6 +32,10 @@ export interface TraceResult {
   adrs: string[];
   issues: TraceIssue[];
   showcase: { page: string; hash: string }[];
+  /** For a driver: computed AssuranceLevel L0/L1/L2 (FPF B.3.3); undefined for non-drivers. */
+  assuranceLevel?: AssuranceLevel;
+  /** One-line reason behind `assuranceLevel` (deterministic). */
+  assuranceReason?: string;
 }
 
 export interface TraceDeps {
@@ -109,6 +114,17 @@ export async function trace(id: string, deps: TraceDeps): Promise<TraceResult> {
     .filter((r) => r.source === basename || r.source === page.relPath || r.source === wanted)
     .map((r) => ({ page: r.page, hash: r.contentHash }));
 
+  // Graded assurance for a driver node (FPF B.3.3) — undefined for non-drivers.
+  let assuranceLevel: AssuranceLevel | undefined;
+  let assuranceReason: string | undefined;
+  if (kind != null && DRIVER_KINDS.includes(kind)) {
+    const row = computeAssurance(g, {
+      ledgerIssueKeys: new Set(ledgerIssues.map((r) => r.key)),
+    }).find((a) => a.driver === basename);
+    assuranceLevel = row?.level;
+    assuranceReason = row?.reason;
+  }
+
   return {
     id: wanted,
     basename,
@@ -118,5 +134,7 @@ export async function trace(id: string, deps: TraceDeps): Promise<TraceResult> {
     adrs: [...new Set(adrs)].sort(),
     issues: issues.sort((a, b) => a.key.localeCompare(b.key)),
     showcase: showcase.sort((a, b) => a.page.localeCompare(b.page)),
+    assuranceLevel,
+    assuranceReason,
   };
 }

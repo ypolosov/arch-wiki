@@ -9343,7 +9343,8 @@ var DEFAULT_EXCLUDE = {
   statuses: ["proposed", "rejected"],
   // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
   // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
-  basenames: ["risks", "gap-analysis", "kanban", "CLAUDE"]
+  // `epistemic-debt` = the FPF B.3.4 decay register — an internal health doc, like gap-analysis.
+  basenames: ["risks", "gap-analysis", "kanban", "epistemic-debt", "CLAUDE"]
 };
 var WIKILINK_RE = /(!?)\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]/g;
 function isPageExcluded(page, exclude) {
@@ -9841,8 +9842,74 @@ async function recordIssue(input, deps) {
   return { key, ledgerAppended, frontmatterUpdated, path: pagePath };
 }
 
+// src/domain/services/Assurance.ts
+var DRIVER_KINDS = [
+  "use-case",
+  "quality-attribute",
+  "constraint",
+  "concern"
+];
+function computeAssurance(g, ctx = {}) {
+  const ledgerKeys = ctx.ledgerIssueKeys ?? /* @__PURE__ */ new Set();
+  const liveCov = /* @__PURE__ */ new Map();
+  const nonLiveCov = /* @__PURE__ */ new Map();
+  for (const c of pagesOfKind(g, ["adr", "iteration"])) {
+    const isIter = kindOfPage(c) === "iteration";
+    const status = isIter ? "accepted" : String(c.frontmatter.status ?? "").toLowerCase();
+    const live = isIter || status === "accepted";
+    for (const l of c.links) {
+      if (live) {
+        const arr = liveCov.get(l.target);
+        if (arr) arr.push(c.basename);
+        else liveCov.set(l.target, [c.basename]);
+      } else {
+        const label = `${c.basename} [${status || "no status"}]`;
+        const arr = nonLiveCov.get(l.target);
+        if (arr) arr.push(label);
+        else nonLiveCov.set(l.target, [label]);
+      }
+    }
+  }
+  const out = [];
+  for (const d of pagesOfKind(g, DRIVER_KINDS)) {
+    const kind = kindOfPage(d);
+    const liveCoverers = [...new Set(liveCov.get(d.basename) ?? [])].sort();
+    const nonLiveCoverers = [...new Set(nonLiveCov.get(d.basename) ?? [])].sort();
+    const rb = d.frontmatter.realized_by;
+    const realizedBy = Array.isArray(rb) ? [...new Set(rb.map(String))].filter((k) => ledgerKeys.has(k)).sort() : [];
+    let level;
+    let reason;
+    if (liveCoverers.length === 0) {
+      level = "L0";
+      reason = nonLiveCoverers.length > 0 ? `no live decision \u2014 only non-accepted: ${nonLiveCoverers.join(", ")}` : "no accepted ADR or iteration covers it";
+    } else if (realizedBy.length > 0) {
+      level = "L2";
+      reason = `live-covered by ${liveCoverers.join(", ")}; realized by ${realizedBy.join(", ")}`;
+    } else {
+      level = "L1";
+      reason = `live-covered by ${liveCoverers.join(", ")}; not yet realized`;
+    }
+    out.push({
+      driver: d.basename,
+      file: d.relPath,
+      kind,
+      level,
+      liveCoverers,
+      nonLiveCoverers,
+      realizedBy,
+      reason
+    });
+  }
+  return out.sort((a, b) => a.driver.localeCompare(b.driver));
+}
+function summarizeAssurance(rows) {
+  const s = { L0: 0, L1: 0, L2: 0, total: rows.length };
+  for (const r of rows) s[r.level]++;
+  return s;
+}
+
 // src/application/usecases/Trace.ts
-var DRIVER_KINDS = ["use-case", "quality-attribute", "constraint", "concern"];
+var DRIVER_KINDS2 = ["use-case", "quality-attribute", "constraint", "concern"];
 async function trace(id, deps) {
   const { repo, ledger } = deps;
   const wanted = id?.trim();
@@ -9864,11 +9931,11 @@ async function trace(id, deps) {
   if (typeof source === "string" && source) {
     raw.push({ raw: source, exists: fileSet.has(source) });
   }
-  const driverSet = new Set(pagesOfKind(g, DRIVER_KINDS).map((p) => p.basename));
+  const driverSet = new Set(pagesOfKind(g, DRIVER_KINDS2).map((p) => p.basename));
   const drivers = page.links.map((l) => l.target).filter((t) => driverSet.has(t) && t !== basename2);
   const adrSet = new Set(pagesOfKind(g, ["adr"]).map((p) => p.basename));
   let adrs;
-  if (kind != null && DRIVER_KINDS.includes(kind)) {
+  if (kind != null && DRIVER_KINDS2.includes(kind)) {
     adrs = pagesOfKind(g, ["adr", "iteration"]).filter((c) => c.links.some((l) => l.target === basename2)).map((c) => c.basename);
   } else {
     adrs = page.links.map((l) => l.target).filter((t) => adrSet.has(t));
@@ -9891,6 +9958,15 @@ async function trace(id, deps) {
     }
   }
   const showcase = ledgerPages.filter((r) => r.source === basename2 || r.source === page.relPath || r.source === wanted).map((r) => ({ page: r.page, hash: r.contentHash }));
+  let assuranceLevel;
+  let assuranceReason;
+  if (kind != null && DRIVER_KINDS2.includes(kind)) {
+    const row = computeAssurance(g, {
+      ledgerIssueKeys: new Set(ledgerIssues.map((r) => r.key))
+    }).find((a) => a.driver === basename2);
+    assuranceLevel = row?.level;
+    assuranceReason = row?.reason;
+  }
   return {
     id: wanted,
     basename: basename2,
@@ -9899,7 +9975,9 @@ async function trace(id, deps) {
     drivers: [...new Set(drivers)].sort(),
     adrs: [...new Set(adrs)].sort(),
     issues: issues.sort((a, b) => a.key.localeCompare(b.key)),
-    showcase: showcase.sort((a, b) => a.page.localeCompare(b.page))
+    showcase: showcase.sort((a, b) => a.page.localeCompare(b.page)),
+    assuranceLevel,
+    assuranceReason
   };
 }
 
@@ -10355,10 +10433,12 @@ var STRUCTURAL = /* @__PURE__ */ new Set([
   "glossary",
   "risks",
   "gap-analysis",
+  "epistemic-debt",
+  // FPF B.3.4 decay register (arch-wiki update-epistemic-debt)
   "utility-tree",
   "kanban"
 ]);
-var DRIVER_KINDS2 = ["use-case", "quality-attribute", "constraint", "concern"];
+var DRIVER_KINDS3 = ["use-case", "quality-attribute", "constraint", "concern"];
 function runLint(g, ctx = {}) {
   const findings = [];
   const inbound = inboundCounts(g);
@@ -10449,7 +10529,7 @@ function runLint(g, ctx = {}) {
       }
     }
   }
-  for (const d of pagesOfKind(g, [...DRIVER_KINDS2])) {
+  for (const d of pagesOfKind(g, [...DRIVER_KINDS3])) {
     if (!coveredAny.has(d.basename)) {
       findings.push({
         rule: "uncovered-driver",
@@ -10846,6 +10926,101 @@ async function updateGapAnalysis(input, deps) {
   const next = replaceManagedRegion(content, START2, END2, body, SCAFFOLD2);
   await repo.write(FILE2, next);
   return { path: FILE2, created: !exists, gapCount: sorted.length };
+}
+
+// src/application/usecases/DriverAssurance.ts
+async function reportDriverAssurance(deps) {
+  const [pages, issues] = await Promise.all([deps.repo.loadPages(), deps.ledger.readIssues()]);
+  const g = buildGraph(pages);
+  const drivers = computeAssurance(g, { ledgerIssueKeys: new Set(issues.map((r) => r.key)) });
+  return { drivers, summary: summarizeAssurance(drivers) };
+}
+
+// src/domain/services/EpistemicDebt.ts
+function gatherEpistemicDebt(g, ctx) {
+  const rows = [];
+  for (const c of gatherSupersededCitations(g)) {
+    rows.push({
+      kind: "superseded-citation",
+      subject: c.citingFile.replace(/^.*\//, "").replace(/\.md$/, ""),
+      detail: `cites ${c.targetStatus} ADR [[${c.targetAdr}]]`
+    });
+  }
+  for (const a of computeAssurance(g, { ledgerIssueKeys: ctx.ledgerIssueKeys })) {
+    if (a.level === "L0" && a.nonLiveCoverers.length > 0) {
+      rows.push({
+        kind: "paper-coverage",
+        subject: a.driver,
+        detail: `covered only by non-accepted ADR(s): ${a.nonLiveCoverers.join(", ")}`
+      });
+    }
+  }
+  for (const p of g.pages) {
+    const rb = p.frontmatter.realized_by;
+    if (!Array.isArray(rb)) continue;
+    for (const k of [...new Set(rb.map(String))].sort()) {
+      if (!ctx.ledgerIssueKeys.has(k)) {
+        rows.push({
+          kind: "stale-issue",
+          subject: p.basename,
+          detail: `realized_by ${k} has no ledger row (stale trace)`
+        });
+      }
+    }
+  }
+  for (const p of g.pages) {
+    const src = p.frontmatter.source;
+    if (typeof src === "string" && src && !ctx.fileSet.has(src)) {
+      rows.push({
+        kind: "missing-source",
+        subject: p.basename,
+        detail: `source \`${src}\` no longer exists on disk`
+      });
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = rows.filter((r) => {
+    const key = `${r.kind}|${r.subject}|${r.detail}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped.sort(
+    (a, b) => a.kind.localeCompare(b.kind) || a.subject.localeCompare(b.subject) || a.detail.localeCompare(b.detail)
+  );
+}
+
+// src/application/usecases/UpdateEpistemicDebt.ts
+var FILE3 = "epistemic-debt.md";
+var START3 = "<!-- arch-wiki:debt:start -->";
+var END3 = "<!-- arch-wiki:debt:end -->";
+var SCAFFOLD3 = "---\ntype: epistemic-debt\ntags: [epistemic-debt]\n---\n\n# Epistemic Debt\n\nDecay signals below are regenerated by `arch-wiki update-epistemic-debt` between\nthe markers (FPF B.3.4 \u2014 evidence is perishable). Notes outside the managed region\nare preserved. This is an internal health register (excluded from the Confluence mirror).\n\n";
+var LABEL2 = {
+  "superseded-citation": "Superseded citation",
+  "paper-coverage": "Paper coverage",
+  "stale-issue": "Stale issue",
+  "missing-source": "Missing source"
+};
+async function updateEpistemicDebt(deps) {
+  const { repo, ledger } = deps;
+  const [pages, files, issues] = await Promise.all([
+    repo.loadPages(),
+    repo.listFiles(),
+    ledger.readIssues()
+  ]);
+  const g = buildGraph(pages);
+  const rows = gatherEpistemicDebt(g, {
+    ledgerIssueKeys: new Set(issues.map((r) => r.key)),
+    fileSet: new Set(files)
+  });
+  const body = rows.map((r) => `- **${LABEL2[r.kind]}** \xB7 [[${r.subject}]] \u2014 ${r.detail}`).join("\n");
+  const exists = await repo.exists(FILE3);
+  const content = exists ? await repo.read(FILE3) : null;
+  const next = replaceManagedRegion(content, START3, END3, body, SCAFFOLD3);
+  await repo.write(FILE3, next);
+  const byKind = {};
+  for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
+  return { path: FILE3, created: !exists, debtCount: rows.length, byKind };
 }
 
 // src/application/usecases/SyncTemplates.ts
@@ -11714,6 +11889,30 @@ async function main() {
       emit({ ok: true, command: "update-gap-analysis", data: result });
     } catch (err) {
       fail("update-gap-analysis", err);
+    }
+  });
+  cli.command("assurance", "compute AssuranceLevel L0/L1/L2 per driver (FPF B.3.3, deterministic)").action(async (opts) => {
+    try {
+      await assertWikiRootExists(opts);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const report = await reportDriverAssurance({ repo, ledger: new FileLedgerStore(root, fs2) });
+      emit({ ok: true, command: "assurance", data: report });
+    } catch (err) {
+      fail("assurance", err);
+    }
+  });
+  cli.command("update-epistemic-debt", "regenerate the epistemic-debt.md decay register (FPF B.3.4)").action(async (opts) => {
+    try {
+      await assertWikiRootExists(opts);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const result = await updateEpistemicDebt({ repo, ledger: new FileLedgerStore(root, fs2) });
+      emit({ ok: true, command: "update-epistemic-debt", data: result });
+    } catch (err) {
+      fail("update-epistemic-debt", err);
     }
   });
   cli.command("sync-templates", "sync plugin templates into target .foam/templates (non-destructive)").option("--check", "report drift only (default; exits 2 on missing/stale)").option("--force", "create missing and update stale templates (curated files preserved)").option("--dry-run", "preview without writing or failing").action(async (opts) => {

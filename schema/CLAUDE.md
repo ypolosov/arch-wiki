@@ -174,6 +174,17 @@ Audit and report (then propose fixes / append to `risks.md`):
 - Terminology drift: terms used across pages but absent from `glossary.md`.
 - Missing referenced pages (e.g. `utility-tree`, `gap-analysis`).
 
+### `/arch-wiki:assurance` (evidence & assurance)
+Graded, deterministic maturity per driver (FPF B.3.3) + a decay register (FPF B.3.4):
+- `arch-wiki assurance` computes each driver's **AssuranceLevel** — **L0** (no accepted
+  ADR/iteration covers it, or only non-accepted "paper coverage"), **L1** (live-covered by an
+  accepted ADR/iteration), **L2** (also realized by a non-stale `realized_by` issue). Design-time
+  coverage and run-time realization stay distinct — never collapsed into one score.
+- `arch-wiki update-epistemic-debt` regenerates the managed region of `epistemic-debt.md` — a
+  Core-owned derived register (like `gap-analysis.md`) consolidating decay signals: superseded
+  citations, paper coverage, stale issues, missing sources. Notes outside the markers survive;
+  never hand-edit inside them. It is an **internal register — excluded from the Confluence mirror**.
+
 ## C4 / LikeC4 rules
 
 > **Project-specific — adapt to your model.** The element kinds, views, and

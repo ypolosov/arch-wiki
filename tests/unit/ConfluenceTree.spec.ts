@@ -43,6 +43,7 @@ describe('ConfluenceTree.isPageExcluded', () => {
   it('excludes register pages, the CLAUDE meta-doc and proposed/rejected ADRs by default', () => {
     expect(isPageExcluded(page('risks.md'), DEFAULT_EXCLUDE)).toBe(true);
     expect(isPageExcluded(page('gap-analysis.md'), DEFAULT_EXCLUDE)).toBe(true);
+    expect(isPageExcluded(page('epistemic-debt.md'), DEFAULT_EXCLUDE)).toBe(true); // FPF B.3.4 register — internal
     expect(isPageExcluded(page('CLAUDE.md'), DEFAULT_EXCLUDE)).toBe(true); // v0.8.2 D: Layer-3 meta-doc
     expect(isPageExcluded(page('adrs/0001-x.md', { fm: { status: 'proposed' } }), DEFAULT_EXCLUDE)).toBe(true);
     expect(isPageExcluded(page('adrs/0002-y.md', { fm: { status: 'accepted' } }), DEFAULT_EXCLUDE)).toBe(false);

@@ -10,7 +10,8 @@ This is almost purely deterministic — the CLI computes the chain; you only nar
 
 1. Run `arch-wiki trace <ID>`. The JSON `data` carries `raw` (provenance, each with
    an `exists` flag), `drivers`, `adrs`, `issues` (each with a `stale` flag when the
-   `realized_by` frontmatter has no matching ledger row), and `showcase`.
+   `realized_by` frontmatter has no matching ledger row), `showcase`, and — for a driver —
+   `assuranceLevel` (L0/L1/L2, FPF B.3.3) with a one-line `assuranceReason`.
 2. Narrate the chain for the human in one or two sentences, e.g. "QA-007 came from
    raw/notes-2026.md via a QAW questionnaire, decided by ADR-0012, realized by
    GRM-431." Flag any `exists:false` raw source or `stale:true` issue as a problem.

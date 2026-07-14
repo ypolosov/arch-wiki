@@ -32,6 +32,7 @@ const STRUCTURAL = new Set([
   'glossary',
   'risks',
   'gap-analysis',
+  'epistemic-debt', // FPF B.3.4 decay register (arch-wiki update-epistemic-debt)
   'utility-tree',
   'kanban',
 ]);

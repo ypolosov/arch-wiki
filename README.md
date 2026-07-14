@@ -94,6 +94,7 @@ stay as-is.
 | `/arch-wiki:ingest <raw/file>` | Read an immutable source, extract drivers/decisions, create/update wiki pages, wire wikilinks, flag contradictions. |
 | `/arch-wiki:query <question>` | Answer from the synthesized wiki (not raw); optionally persist the answer as a `concepts/` page. |
 | `/arch-wiki:lint` | Audit graph integrity (orphans, broken links, uncovered drivers, superseded ADRs, terminology drift). |
+| `/arch-wiki:assurance` | Report graded AssuranceLevel (L0/L1/L2) per driver and regenerate the `epistemic-debt.md` decay register (FPF B.3.3/B.3.4). |
 | `/arch-wiki:adr <title>` | Scaffold the next-numbered MADR ADR with drivers wired as wikilinks. |
 | `/arch-wiki:driver <uc\|qa\|con\|conc> <title>` | Scaffold a new ADD driver from the right template. |
 | `/arch-wiki:iteration <title>` | Scaffold a new ADD iteration log. |

@@ -12,7 +12,7 @@ import { WikiPage, kindOfPage } from '../model/WikiPage';
 export interface MirrorExclude {
   /** ADR statuses hidden from stakeholders (default: proposed/rejected). */
   statuses: string[];
-  /** Maintenance/register/meta basenames hidden (default: risks/gap-analysis/kanban + the CLAUDE meta-doc). */
+  /** Maintenance/register/meta basenames hidden (default: risks/gap-analysis/kanban/epistemic-debt + the CLAUDE meta-doc). */
   basenames: string[];
 }
 
@@ -20,7 +20,8 @@ export const DEFAULT_EXCLUDE: MirrorExclude = {
   statuses: ['proposed', 'rejected'],
   // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
   // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
-  basenames: ['risks', 'gap-analysis', 'kanban', 'CLAUDE'],
+  // `epistemic-debt` = the FPF B.3.4 decay register — an internal health doc, like gap-analysis.
+  basenames: ['risks', 'gap-analysis', 'kanban', 'epistemic-debt', 'CLAUDE'],
 };
 
 export interface CrossLink {

@@ -54,6 +54,7 @@ describe('runLint', () => {
       page('concepts/lonely.md'),
       page('arc42/01-introduction-and-goals.md'),
       page('glossary.md'),
+      page('epistemic-debt.md'), // structural register — never an orphan
     ]);
     const orphans = runLint(g).filter((f) => f.rule === 'orphan');
     expect(orphans.map((o) => o.file)).toEqual(['concepts/lonely.md']);

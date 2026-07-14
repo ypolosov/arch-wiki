@@ -36,6 +36,8 @@ import { recordRisk } from '../application/usecases/RecordRisk';
 import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
 import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
 import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
+import { reportDriverAssurance } from '../application/usecases/DriverAssurance';
+import { updateEpistemicDebt } from '../application/usecases/UpdateEpistemicDebt';
 import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
 import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
@@ -993,6 +995,36 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'update-gap-analysis', data: result });
       } catch (err) {
         fail('update-gap-analysis', err);
+      }
+    });
+
+  cli
+    .command('assurance', 'compute AssuranceLevel L0/L1/L2 per driver (FPF B.3.3, deterministic)')
+    .action(async (opts: GlobalOpts) => {
+      try {
+        await assertWikiRootExists(opts);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const report = await reportDriverAssurance({ repo, ledger: new FileLedgerStore(root, fs) });
+        emit({ ok: true, command: 'assurance', data: report });
+      } catch (err) {
+        fail('assurance', err);
+      }
+    });
+
+  cli
+    .command('update-epistemic-debt', 'regenerate the epistemic-debt.md decay register (FPF B.3.4)')
+    .action(async (opts: GlobalOpts) => {
+      try {
+        await assertWikiRootExists(opts);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const result = await updateEpistemicDebt({ repo, ledger: new FileLedgerStore(root, fs) });
+        emit({ ok: true, command: 'update-epistemic-debt', data: result });
+      } catch (err) {
+        fail('update-epistemic-debt', err);
       }
     });
 
