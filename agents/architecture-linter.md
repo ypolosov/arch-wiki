@@ -10,7 +10,9 @@ rules already run in the `arch-wiki` CLI; you do **not** recompute them and you 
 
 ## Inputs
 The `arch-wiki lint --json` output. Deterministic `findings`: orphans, broken/typo
-wikilinks, broken md-links, uncovered drivers, superseded-without-successor, and
+wikilinks, broken md-links, uncovered drivers, `driver-not-live-covered` (a driver whose
+only inbound decisions are non-accepted — proposed/superseded/deprecated — so it is not yet
+*live*-covered; low), superseded-without-successor, and
 **required-section** rules (`missing-required-section` / `required-section-underlinked`,
 configured per kind in `.arch-wiki/config.json`). The output also carries a
 `supersededCitations` **candidate** block (not findings). Core already filters this

@@ -163,6 +163,10 @@ Audit and report (then propose fixes / append to `risks.md`):
 - Orphan pages and broken wikilinks / unresolved placeholders.
 - QA scenario with no linked ADR **or** no linked C4 element.
 - Driver (UC/QA/CON/CONC) with no coverage in any ADR/iteration (gap analysis).
+- Driver **live-covered only by non-accepted** ADR(s) — "paper coverage": a `proposed`/
+  `superseded`/`deprecated` decision does not *live-cover* a driver (`driver-not-live-covered`,
+  low; FPF B.3.3 assurance-from-evidence / A.2.4 status-is-not-authority). It is not a hard
+  gap (an inbound decision exists) but it is not yet a ratified one.
 - ADR with `status: superseded`/`deprecated` but no link to its successor.
 - C4 element ⟷ wiki entity drift — the **deterministic verdict is
   `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this

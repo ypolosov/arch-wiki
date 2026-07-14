@@ -127,18 +127,53 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     }
   }
 
-  // 4. Uncovered drivers: no inbound link from any ADR or iteration.
-  const covered = new Set<string>();
+  // 4. Driver coverage, status-aware (FPF B.3.3 — assurance is computed from evidence,
+  //    not asserted; A.2.4 — a proposed/rejected/superseded decision does not carry
+  //    authority, so it does not *live-cover* a driver). Two sets over inbound ADR /
+  //    iteration links:
+  //      coveredAny  — linked by any ADR (any status) or iteration.
+  //      coveredLive — linked by an iteration OR an ADR with status `accepted`.
+  //    `uncovered-driver` (medium, unchanged): no inbound at all — same rule/message as
+  //    before, so existing baselines still suppress it. `driver-not-live-covered` (low,
+  //    additive): inbound exists but none is a live/accepted decision ("paper coverage").
+  const coveredAny = new Set<string>();
+  const coveredLive = new Set<string>();
+  const nonLiveLinkers = new Map<string, string[]>();
   for (const c of pagesOfKind(g, ['adr', 'iteration'])) {
-    for (const l of c.links) covered.add(l.target);
+    const isIter = kindOfPage(c) === 'iteration';
+    const status = isIter
+      ? 'accepted'
+      : String((c.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
+    const live = isIter || status === 'accepted';
+    for (const l of c.links) {
+      coveredAny.add(l.target);
+      if (live) {
+        coveredLive.add(l.target);
+      } else {
+        const label = `${c.basename} [${status || 'no status'}]`;
+        const arr = nonLiveLinkers.get(l.target);
+        if (arr) arr.push(label);
+        else nonLiveLinkers.set(l.target, [label]);
+      }
+    }
   }
   for (const d of pagesOfKind(g, [...DRIVER_KINDS])) {
-    if (!covered.has(d.basename)) {
+    if (!coveredAny.has(d.basename)) {
       findings.push({
         rule: 'uncovered-driver',
         severity: 'medium',
         file: d.relPath,
         message: `driver ${d.basename} is not covered by any ADR or iteration`,
+      });
+    } else if (!coveredLive.has(d.basename)) {
+      // De-dup: one ADR may link a driver from several sections (Decision Drivers +
+      // prose + More Information), which would repeat its label otherwise.
+      const linkers = [...new Set(nonLiveLinkers.get(d.basename) ?? [])].sort().join(', ');
+      findings.push({
+        rule: 'driver-not-live-covered',
+        severity: 'low',
+        file: d.relPath,
+        message: `driver ${d.basename} is linked only by non-accepted ADR(s) (${linkers}) — not yet live-covered`,
       });
     }
   }

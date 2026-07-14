@@ -8,8 +8,9 @@ Run the **Lint** operation. Args: `$ARGUMENTS`
 
 1. Run the deterministic linter (pre-approved): `arch-wiki lint --json` (pass through
    any `--severity`/`--changed`). The CLI owns the reproducible rules — orphans,
-   typo'd/broken wikilinks, broken markdown links, uncovered drivers, and superseded
-   ADRs without successors — and already suppresses the adoption baseline.
+   typo'd/broken wikilinks, broken markdown links, uncovered drivers, drivers live-covered
+   only by non-accepted ADRs (`driver-not-live-covered`, low), and superseded ADRs without
+   successors — and already suppresses the adoption baseline.
 2. Hand the findings JSON to the **architecture-linter** subagent. It groups by
    severity, explains each with a concrete fix, runs the **judgement-based** checks
    the CLI cannot (QA↔C4 linkage, terminology drift vs `glossary.md`), and proposes

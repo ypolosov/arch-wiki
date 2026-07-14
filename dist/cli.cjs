@@ -10430,17 +10430,40 @@ function runLint(g, ctx = {}) {
       });
     }
   }
-  const covered = /* @__PURE__ */ new Set();
+  const coveredAny = /* @__PURE__ */ new Set();
+  const coveredLive = /* @__PURE__ */ new Set();
+  const nonLiveLinkers = /* @__PURE__ */ new Map();
   for (const c of pagesOfKind(g, ["adr", "iteration"])) {
-    for (const l of c.links) covered.add(l.target);
+    const isIter = kindOfPage(c) === "iteration";
+    const status = isIter ? "accepted" : String(c.frontmatter.status ?? "").toLowerCase();
+    const live = isIter || status === "accepted";
+    for (const l of c.links) {
+      coveredAny.add(l.target);
+      if (live) {
+        coveredLive.add(l.target);
+      } else {
+        const label = `${c.basename} [${status || "no status"}]`;
+        const arr = nonLiveLinkers.get(l.target);
+        if (arr) arr.push(label);
+        else nonLiveLinkers.set(l.target, [label]);
+      }
+    }
   }
   for (const d of pagesOfKind(g, [...DRIVER_KINDS2])) {
-    if (!covered.has(d.basename)) {
+    if (!coveredAny.has(d.basename)) {
       findings.push({
         rule: "uncovered-driver",
         severity: "medium",
         file: d.relPath,
         message: `driver ${d.basename} is not covered by any ADR or iteration`
+      });
+    } else if (!coveredLive.has(d.basename)) {
+      const linkers = [...new Set(nonLiveLinkers.get(d.basename) ?? [])].sort().join(", ");
+      findings.push({
+        rule: "driver-not-live-covered",
+        severity: "low",
+        file: d.relPath,
+        message: `driver ${d.basename} is linked only by non-accepted ADR(s) (${linkers}) \u2014 not yet live-covered`
       });
     }
   }

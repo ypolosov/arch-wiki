@@ -84,6 +84,71 @@ describe('runLint', () => {
   });
 });
 
+describe('driver-not-live-covered (status-aware coverage)', () => {
+  const UC = 'drivers/use-cases/UC-001-login.md';
+
+  it('does not flag a driver covered by an accepted ADR', () => {
+    const g = buildGraph([
+      page(UC),
+      page('adrs/0001-auth.md', { frontmatter: { status: 'accepted' }, links: [wl('UC-001-login')] }),
+    ]);
+    const rules = runLint(g).map((f) => f.rule);
+    expect(rules).not.toContain('uncovered-driver');
+    expect(rules).not.toContain('driver-not-live-covered');
+  });
+
+  it('flags a driver linked only by a proposed ADR as not-live-covered (low), not uncovered', () => {
+    const g = buildGraph([
+      page(UC),
+      page('adrs/0001-auth.md', { frontmatter: { status: 'proposed' }, links: [wl('UC-001-login')] }),
+    ]);
+    const findings = runLint(g);
+    expect(findings.some((f) => f.rule === 'uncovered-driver')).toBe(false);
+    const f = findings.find((x) => x.rule === 'driver-not-live-covered');
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe('low');
+    expect(f!.file).toBe(UC);
+    expect(f!.message).toContain('0001-auth [proposed]');
+  });
+
+  it('treats a superseded ADR as not live-covering (a dead decision carries no authority)', () => {
+    const g = buildGraph([
+      page(UC),
+      page('adrs/0001-auth.md', { frontmatter: { status: 'superseded' }, links: [wl('UC-001-login')] }),
+    ]);
+    expect(runLint(g).some((f) => f.rule === 'driver-not-live-covered')).toBe(true);
+  });
+
+  it('an iteration link makes a driver live-covered even if the only ADR is proposed', () => {
+    const g = buildGraph([
+      page(UC),
+      page('adrs/0001-auth.md', { frontmatter: { status: 'proposed' }, links: [wl('UC-001-login')] }),
+      page('iterations/ITER-01.md', { links: [wl('UC-001-login')] }),
+    ]);
+    const rules = runLint(g).map((f) => f.rule);
+    expect(rules).not.toContain('uncovered-driver');
+    expect(rules).not.toContain('driver-not-live-covered');
+  });
+
+  it('still flags a driver with no inbound as uncovered-driver (unchanged), not not-live-covered', () => {
+    const g = buildGraph([page(UC, { links: [] })]);
+    const rules = runLint(g).map((f) => f.rule);
+    expect(rules).toContain('uncovered-driver');
+    expect(rules).not.toContain('driver-not-live-covered');
+  });
+
+  it('lists multiple non-accepted linkers sorted and de-duplicated in the message', () => {
+    const g = buildGraph([
+      page(UC),
+      page('adrs/0009-b.md', { frontmatter: { status: 'deprecated' }, links: [wl('UC-001-login')] }),
+      // 0002-a links the same driver twice (e.g. Decision Drivers + More Information).
+      page('adrs/0002-a.md', { frontmatter: { status: 'proposed' }, links: [wl('UC-001-login'), wl('UC-001-login')] }),
+    ]);
+    const f = runLint(g).find((x) => x.rule === 'driver-not-live-covered');
+    expect(f!.message).toContain('(0002-a [proposed], 0009-b [deprecated])'); // 0002-a once, sorted
+  });
+});
+
 describe('required-section rule', () => {
   const QA = 'drivers/quality-attributes/QA-001-latency.md';
   const ctx = { requiredSections: req([['quality-attribute', [sec('C4 elements', 1, 'high')]]]) };
