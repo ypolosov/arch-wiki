@@ -4,6 +4,10 @@ description: MADR Architecture Decision Record format, numbering, and status lif
 
 # ADR (MADR) format
 
+> **FPF kind.** An ADR is a *decision episteme* in an append-only ledger; this skill is its
+> `U.MethodDescription` (FPF A.3.2). Superseding is a decision-adequacy event (FPF C.32.ADA) —
+> the old rationale decayed or was replaced — **not** a rewrite of the accepted record.
+
 ADRs are the decision *ledger* (arc42 §9) — append-only, one decision per file.
 Canonical skeleton: `docs/architecture/adrs/0000-template.md`.
 

@@ -37,12 +37,27 @@ contract behind the `arch-wiki` plugin operations (`/arch-wiki:ingest`,
 
 ## Methodology roles (the ontology)
 
-- **ADD 3.0** = design process. Inputs = drivers (`drivers/`); the iterative loop
-  is logged in `iterations/` (ITER-NN).
-- **arc42** = documentation container. The 12 hubs in `arc42/` map sections to
-  artifacts (see table below).
-- **C4 / LikeC4** = visual notation. Source of truth = `c4/src/*.c4`.
-- **ADR (MADR)** = decision ledger. `adrs/` (arc42 §9).
+This wiki is an **FPF Domain Principle Framework (DPF)** — a domain specialization of the
+First Principles Framework for solution architecture. Each methodology maps onto an explicit
+FPF *kind* so every command, agent, and skill shares one vocabulary and the classic category
+errors are ruled out by construction: *a recipe is not the work* (a method ≠ its enactment)
+and *a backlog card is not performed work* (a plan ≠ what happened).
+
+| Methodology element | FPF kind | Role |
+|---|---|---|
+| **ADD 3.0** | `U.Method` (A.3.1) | the reusable *way of doing* design; inputs = drivers (`drivers/`). Not the work. |
+| the **`add-method` skill** | `U.MethodDescription` (A.3.2) | the episteme that *describes* ADD. A description ≠ an enactment. |
+| **`ITER-NN`** iteration log | `U.Work` (A.15.1) | a *dated enactment* of ADD — what actually happened. Not proof the design is "done". |
+| a **`kanban.md` card** / iteration goal | `U.WorkPlan` (A.15.2) | *intended* work. A card is not performed work. |
+| **arc42** | publication / access carrier | the 12 hubs in `arc42/` *expose* artifacts (see table below); they do no work and are not a method. |
+| **C4 / LikeC4** | notation / View (E.5.2, GR-2) | the *visual notation* of the structures; hand-authored in `c4/src/*.c4`. The wiki **entities** are the semantic canon — `.c4` is one notation of them, kept consistent by `validate-c4`. |
+| **ADR (MADR)** | decision-episteme ledger | append-only record of decisions (the *why*); `adrs/` (arc42 §9). |
+| a **driver** (UC/QA/CON/CONC) | problem-side episteme (C.2.P) | the stable problem inputs a decision must cite (a decision cites its drivers, not vice-versa). |
+
+> **Notational Independence (GR-2, FPF E.5.2).** The wiki entities carry the meaning; C4/LikeC4
+> is one notation of them. You still hand-author the model in `c4/src/*.c4`, but when the
+> notation and the wiki disagree it is **drift to reconcile** — `arch-wiki validate-c4` judges
+> it deterministically (never eyeballed).
 
 ### arc42 → artifact map
 | arc42 | Source |

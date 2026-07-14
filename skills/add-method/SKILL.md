@@ -4,6 +4,11 @@ description: Attribute-Driven Design (ADD 3.0) method — architectural drivers,
 
 # ADD 3.0 (Attribute-Driven Design)
 
+> **FPF kind.** This skill is the `U.MethodDescription` (FPF A.3.2) of the ADD `U.Method`
+> (A.3.1). An `ITER-NN` log is the `U.Work` (A.15.1) that *enacts* it — not the method, and
+> not evidence the design is "done". A `kanban.md` card is a `U.WorkPlan` (A.15.2): intended
+> work, not performed work.
+
 ADD (Cervantes & Kazman, *Designing Software Architectures*) is the design
 *process/engine*. It turns architectural drivers into design decisions,
 iteratively.

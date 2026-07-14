@@ -4,6 +4,10 @@ description: arc42 12-section template and how each section maps to artifacts in
 
 # arc42 section map
 
+> **FPF kind.** arc42 is a *publication / access carrier* (FPF E.4.DPF): its 12 hubs *expose*
+> artifacts and do no work. It is a container, not a `U.Method` — the substance comes from the
+> ADD drivers, ADRs, and C4 the hubs link to.
+
 arc42 is the documentation *container*: 12 sections, each answering "where does
 this piece of architecture knowledge live". In this repo each section is a hub
 page in `docs/architecture/arc42/NN-*.md` that links to the real artifacts.

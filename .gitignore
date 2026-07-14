@@ -5,3 +5,5 @@ coverage/
 *.log
 .claude/
 # NOTE: dist/ is intentionally committed (the runtime bundle the target runs).
+# FPF reference spec (9.7MB) — an external input, not plugin source; kept local.
+FPF-Spec.md

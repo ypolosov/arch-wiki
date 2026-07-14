@@ -4,6 +4,11 @@ description: LikeC4 DSL conventions for the C4 model in docs/architecture/c4. Us
 
 # LikeC4 (C4-as-code)
 
+> **FPF kind.** This skill is a `U.MethodDescription` (FPF A.3.2) for authoring the C4
+> *notation*. Per Notational Independence (E.5.2, GR-2) the wiki **entities** are the semantic
+> canon; `c4/src/*.c4` is one notation of them — you hand-author it, and `validate-c4`
+> reconciles any drift deterministically.
+
 LikeC4 is the visual *notation*: textual `*.c4` → interactive C4 diagrams & a
 static site. Source of truth: `docs/architecture/c4/src/`. Config:
 `c4/.likec4.config.json` (set the project name/title for your target system).
