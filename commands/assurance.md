@@ -18,5 +18,7 @@ The verdicts are deterministic and Core-owned — you only narrate.
    sources. It writes ONLY between the `<!-- arch-wiki:debt:* -->` markers; human notes outside them
    survive. It is an internal health register — **excluded from the Confluence mirror**.
 3. Narrate: the L0/L1/L2 distribution; the L0 drivers that most need a ratified decision; the debt
-   rows by kind. Propose ratifying `proposed` ADRs (→ L1) or recording realization (→ L2) — never
-   fabricate coverage, and never hand-edit `epistemic-debt.md` (it is Core-regenerated).
+   rows by kind (incl. **overdue-evidence** from expired `valid_until`). Propose ratifying `proposed`
+   ADRs (→ L1) or recording realization (→ L2) — never fabricate coverage, and never hand-edit
+   `epistemic-debt.md` (it is Core-regenerated). To accept a debt item for now, use the human-gated
+   `arch-wiki waive-debt --subject <id> --reason <…> [--until <date>] --by <who>` (FPF B.3.4 CC-ED.5).

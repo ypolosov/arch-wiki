@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { FileSystemPort } from '../../application/ports/FileSystemPort';
 import {
+  DebtWaiverRow,
   IssueLedgerRow,
   LedgerStorePort,
   PageLedgerRow,
@@ -10,6 +11,7 @@ import {
 const ISSUES_FILE = 'created-issues.json';
 const PAGES_FILE = 'published-pages.json';
 const PULLED_FILE = 'pulled-sources.json';
+const WAIVERS_FILE = 'epistemic-debt-waivers.json';
 const SCHEMA_VERSION = 1;
 
 /** Stores idempotency ledgers at `<root>/.arch-wiki/{created-issues,published-pages}.json`. */
@@ -117,6 +119,25 @@ export class FileLedgerStore implements LedgerStorePort {
     const next = rows.filter((r) => r.pageId !== pageId);
     if (next.length === rows.length) return false;
     await this.writeArray(PULLED_FILE, 'pulled', next);
+    return true;
+  }
+
+  async readWaivers(): Promise<DebtWaiverRow[]> {
+    return this.readArray<DebtWaiverRow>(WAIVERS_FILE, 'waivers');
+  }
+
+  async appendWaiver(row: DebtWaiverRow): Promise<boolean> {
+    const rows = await this.readWaivers();
+    const idx = rows.findIndex((r) => r.subject === row.subject);
+    if (idx >= 0) {
+      const cur = rows[idx]!;
+      if (cur.reason === row.reason && cur.until === row.until && cur.by === row.by) return false; // identical
+      rows[idx] = row; // upsert-on-change (key = subject)
+    } else {
+      rows.push(row);
+    }
+    rows.sort((a, b) => a.subject.localeCompare(b.subject));
+    await this.writeArray(WAIVERS_FILE, 'waivers', rows);
     return true;
   }
 }

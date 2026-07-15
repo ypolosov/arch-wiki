@@ -182,8 +182,13 @@ Graded, deterministic maturity per driver (FPF B.3.3) + a decay register (FPF B.
   coverage and run-time realization stay distinct — never collapsed into one score.
 - `arch-wiki update-epistemic-debt` regenerates the managed region of `epistemic-debt.md` — a
   Core-owned derived register (like `gap-analysis.md`) consolidating decay signals: superseded
-  citations, paper coverage, stale issues, missing sources. Notes outside the markers survive;
-  never hand-edit inside them. It is an **internal register — excluded from the Confluence mirror**.
+  citations, paper coverage, stale issues, missing sources, and **overdue evidence** (an artifact
+  whose optional `valid_until:` frontmatter has expired past `evidence.debtBudgetDays`, FPF B.3.4).
+  Typed provenance frontmatter (`verified_by`/`validated_by` — design-time vs run-time carriers,
+  FPF A.10) is machine-read and mirror-stripped. Notes outside the markers survive; never hand-edit
+  inside them. It is an **internal register — excluded from the Confluence mirror**.
+- `arch-wiki waive-debt --subject <id> --reason <…> [--until <date>] --by <who>` records a
+  human-gated, auditable waiver (FPF B.3.4 CC-ED.5) suppressing a subject's debt until a date.
 
 ### `/arch-wiki:review` (adequacy)
 Per-kind structural adequacy of design artifacts (FPF C.32.ADA decision-adequacy, C.30.AD):

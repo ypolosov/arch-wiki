@@ -47,6 +47,18 @@ export interface PulledSourceRow {
   source: string;
 }
 
+/** A human-gated waiver suppressing an artifact's epistemic debt (FPF B.3.4 CC-ED.5). */
+export interface DebtWaiverRow {
+  /** Artifact basename whose debt is waived. */
+  subject: string;
+  reason: string;
+  /** ISO date the waiver expires (`null` = indefinite). */
+  until: string | null;
+  /** Who authorized the waiver (audit). */
+  by: string;
+  waivedAt: string;
+}
+
 /**
  * Driven port for the git-stored idempotency ledgers under `.arch-wiki/`. The
  * ledger is the authority: external systems reconcile FROM it (invariant 7).
@@ -68,4 +80,8 @@ export interface LedgerStorePort {
   appendPulled(row: PulledSourceRow): Promise<boolean>;
   /** Remove the row for `pageId`; true if one was removed (orphan reconcile). */
   removePulled(pageId: string): Promise<boolean>;
+  /** Epistemic-debt waiver rows (`[]` if absent) — FPF B.3.4 CC-ED.5. */
+  readWaivers(): Promise<DebtWaiverRow[]>;
+  /** Upsert by `subject`: false if an identical row exists, else (re)writes it. */
+  appendWaiver(row: DebtWaiverRow): Promise<boolean>;
 }

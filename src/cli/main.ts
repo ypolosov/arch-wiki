@@ -38,6 +38,7 @@ import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
 import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
 import { reportDriverAssurance } from '../application/usecases/DriverAssurance';
 import { updateEpistemicDebt } from '../application/usecases/UpdateEpistemicDebt';
+import { waiveDebt } from '../application/usecases/Waive';
 import { reviewAdequacy } from '../application/usecases/ReviewAdequacy';
 import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
@@ -1022,10 +1023,40 @@ async function main(): Promise<void> {
         const fs = new NodeFileSystem();
         const root = wikiRoot(opts);
         const repo = new FoamWikiRepository(root, fs);
-        const result = await updateEpistemicDebt({ repo, ledger: new FileLedgerStore(root, fs) });
+        const result = await updateEpistemicDebt({
+          repo,
+          ledger: new FileLedgerStore(root, fs),
+          clock: new SystemClock(),
+          budgetDays: (await loadProjectConfig(opts)).debtBudgetDays(),
+        });
         emit({ ok: true, command: 'update-epistemic-debt', data: result });
       } catch (err) {
         fail('update-epistemic-debt', err);
+      }
+    });
+
+  cli
+    .command('waive-debt', 'record a human-gated epistemic-debt waiver for a subject (FPF B.3.4 CC-ED.5)')
+    .option('--subject <id>', 'artifact basename whose debt is waived')
+    .option('--reason <text>', 'why the debt is accepted for now')
+    .option('--until <date>', 'ISO date the waiver expires (omit for indefinite)')
+    .option('--by <who>', 'who authorized the waiver (audit)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        await assertWikiRootExists(opts);
+        const fs = new NodeFileSystem();
+        const result = await waiveDebt(
+          {
+            subject: opts.subject ? String(opts.subject) : '',
+            reason: opts.reason ? String(opts.reason) : '',
+            until: opts.until ? String(opts.until) : null,
+            by: opts.by ? String(opts.by) : '',
+          },
+          { ledger: new FileLedgerStore(wikiRoot(opts), fs), clock: new SystemClock() },
+        );
+        emit({ ok: true, command: 'waive-debt', data: result });
+      } catch (err) {
+        fail('waive-debt', err);
       }
     });
 

@@ -10,9 +10,10 @@ async function tmpRoot(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'aw-debt-'));
   return path.join(dir, 'docs/architecture');
 }
+const FIXED_NOW = { now: () => new Date('2026-07-15T00:00:00Z') };
 function deps(root: string) {
   const sys = new NodeFileSystem();
-  return { repo: new FoamWikiRepository(root, sys), ledger: new FileLedgerStore(root, sys) };
+  return { repo: new FoamWikiRepository(root, sys), ledger: new FileLedgerStore(root, sys), clock: FIXED_NOW };
 }
 
 describe('updateEpistemicDebt (integration)', () => {
@@ -83,5 +84,38 @@ describe('updateEpistemicDebt (integration)', () => {
     const body = await d.repo.read('epistemic-debt.md');
     expect(body).toContain('<!-- arch-wiki:debt:start -->');
     expect(body).toContain('<!-- arch-wiki:debt:end -->');
+  });
+
+  it('flags overdue evidence when valid_until is past now (FPF B.3.4)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-x.md'),
+      '---\ntype: quality-attribute\nvalid_until: 2026-01-01\n---\n# QA-001\n',
+    );
+    const d = deps(root); // fixed now = 2026-07-15
+    const res = await updateEpistemicDebt(d);
+    expect(res.byKind['overdue-evidence']).toBe(1);
+    expect(await d.repo.read('epistemic-debt.md')).toContain('**Overdue evidence** · [[QA-001-x]]');
+  });
+
+  it('an active waiver suppresses a subject\'s debt (CC-ED.5)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-001-x.md'),
+      '---\ntype: quality-attribute\nvalid_until: 2026-01-01\n---\n# QA-001\n',
+    );
+    const d = deps(root);
+    await d.ledger.appendWaiver({
+      subject: 'QA-001-x',
+      reason: 'known, revalidation scheduled',
+      until: '2026-09-01',
+      by: '@lead',
+      waivedAt: '2026-07-15T00:00:00Z',
+    });
+    const res = await updateEpistemicDebt(d);
+    expect(res.debtCount).toBe(0);
+    expect(res.waived).toBe(1);
   });
 });

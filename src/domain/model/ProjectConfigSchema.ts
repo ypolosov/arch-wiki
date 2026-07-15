@@ -157,6 +157,9 @@ export const ProjectConfigSchema = z
     tasks: TasksSchema,
     requiredSections: RequiredSectionsSchema,
     integrations: IntegrationsSchema,
+    // 6. Epistemic-debt decay (FPF B.3.4). `debtBudgetDays` = the grace period before an
+    // artifact's `valid_until` counts as overdue-evidence debt (default 0 = overdue on the day).
+    evidence: z.object({ debtBudgetDays: z.number().int().min(0) }).strict().optional(),
   })
   .strict();
 

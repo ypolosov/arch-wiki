@@ -1,6 +1,7 @@
 import { buildGraph } from '../../domain/model/Graph';
 import { DebtKind, DebtRow, gatherEpistemicDebt } from '../../domain/services/EpistemicDebt';
 import { replaceManagedRegion } from '../../domain/services/ManagedRegion';
+import { ClockPort } from '../ports/ClockPort';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
@@ -19,39 +20,55 @@ const LABEL: Record<DebtKind, string> = {
   'paper-coverage': 'Paper coverage',
   'stale-issue': 'Stale issue',
   'missing-source': 'Missing source',
+  'overdue-evidence': 'Overdue evidence',
 };
 
 export interface UpdateEpistemicDebtDeps {
   repo: WikiRepositoryPort;
   ledger: LedgerStorePort;
+  clock: ClockPort;
+  /** Grace days before `valid_until` counts as overdue (from ProjectConfig; default 0). */
+  budgetDays?: number;
 }
 
 export interface UpdateEpistemicDebtResult {
   path: string;
   created: boolean;
   debtCount: number;
+  waived: number;
   byKind: Record<string, number>;
 }
 
 /**
  * Regenerate the managed region of `epistemic-debt.md` from the current decay signals
- * (FPF B.3.4). Mirrors `updateGapAnalysis`: empty debt ⇒ empty region (never deletes
- * the file); notes outside the markers survive; deterministic. The register is an
- * internal health doc — it is in the mirror's default exclude list, never published.
+ * (FPF B.3.4). Mirrors `updateGapAnalysis`: empty debt ⇒ empty region (never deletes the
+ * file); notes outside the markers survive; deterministic given `clock.now()`. Internal
+ * register — in the mirror's default exclude list, never published. Active waivers
+ * (CC-ED.5) are honored: a waived subject's debt is suppressed.
  */
 export async function updateEpistemicDebt(
   deps: UpdateEpistemicDebtDeps,
 ): Promise<UpdateEpistemicDebtResult> {
-  const { repo, ledger } = deps;
-  const [pages, files, issues] = await Promise.all([
+  const { repo, ledger, clock } = deps;
+  const [pages, files, issues, waivers] = await Promise.all([
     repo.loadPages(),
     repo.listFiles(),
     ledger.readIssues(),
+    ledger.readWaivers(),
   ]);
+  const now = clock.now();
+  const today = now.toISOString().slice(0, 10);
+  const waivedSubjects = new Set(
+    waivers.filter((w) => w.until == null || String(w.until).slice(0, 10) >= today).map((w) => w.subject),
+  );
+
   const g = buildGraph(pages);
   const rows: DebtRow[] = gatherEpistemicDebt(g, {
     ledgerIssueKeys: new Set(issues.map((r) => r.key)),
     fileSet: new Set(files),
+    now,
+    budgetDays: deps.budgetDays ?? 0,
+    waivedSubjects,
   });
 
   const body = rows
@@ -65,5 +82,5 @@ export async function updateEpistemicDebt(
 
   const byKind: Record<string, number> = {};
   for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
-  return { path: FILE, created: !exists, debtCount: rows.length, byKind };
+  return { path: FILE, created: !exists, debtCount: rows.length, waived: waivedSubjects.size, byKind };
 }

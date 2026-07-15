@@ -69,6 +69,29 @@ describe('gatherEpistemicDebt', () => {
     ).toBe(false);
   });
 
+  it('overdue-evidence — valid_until past now, respecting the budget and skipping without `now`', () => {
+    const g = buildGraph([
+      page('drivers/quality-attributes/QA-1-x.md', { frontmatter: { valid_until: '2026-01-01' } }),
+    ]);
+    const now = new Date('2026-07-15T00:00:00Z');
+    expect(gatherEpistemicDebt(g, { ...ctx(), now }).some((r) => r.kind === 'overdue-evidence')).toBe(true);
+    expect(gatherEpistemicDebt(g, { ...ctx(), now, budgetDays: 100000 }).some((r) => r.kind === 'overdue-evidence')).toBe(false);
+    expect(gatherEpistemicDebt(g, ctx()).some((r) => r.kind === 'overdue-evidence')).toBe(false);
+  });
+
+  it('missing carrier — a validated_by file path that is gone', () => {
+    const g = buildGraph([
+      page('drivers/quality-attributes/QA-1-x.md', { frontmatter: { validated_by: ['raw/measure.csv'] } }),
+    ]);
+    expect(gatherEpistemicDebt(g, ctx()).some((r) => r.kind === 'missing-source')).toBe(true);
+    expect(gatherEpistemicDebt(g, ctx({ files: ['raw/measure.csv'] })).some((r) => r.kind === 'missing-source')).toBe(false);
+  });
+
+  it('a waived subject is excluded from the register', () => {
+    const g = buildGraph([page('drivers/use-cases/UC-1-x.md', { frontmatter: { source: 'raw/gone.md' } })]);
+    expect(gatherEpistemicDebt(g, { ...ctx(), waivedSubjects: new Set(['UC-1-x']) })).toEqual([]);
+  });
+
   it('de-duplicates identical rows (a page citing the same superseded ADR twice)', () => {
     const g = buildGraph([
       page('adrs/0007-old.md', { frontmatter: { status: 'superseded' }, links: [wl('0019-new')] }),

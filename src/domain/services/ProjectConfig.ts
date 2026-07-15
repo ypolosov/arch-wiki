@@ -36,6 +36,11 @@ export class ProjectConfig {
     return this.cfg.integrations?.notifications ?? { channel: 'none' };
   }
 
+  /** OPTIONAL+default. Grace days before `valid_until` counts as overdue-evidence debt (FPF B.3.4). */
+  debtBudgetDays(): number {
+    return this.cfg.evidence?.debtBudgetDays ?? 0;
+  }
+
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent (no guess). */
   c4(): NonNullable<ProjectConfigFile['c4']> {
     if (!this.cfg.c4) {

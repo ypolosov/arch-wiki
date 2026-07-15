@@ -8711,7 +8711,10 @@ var ProjectConfigSchema = external_exports.object({
   c4: C4Schema,
   tasks: TasksSchema,
   requiredSections: RequiredSectionsSchema,
-  integrations: IntegrationsSchema
+  integrations: IntegrationsSchema,
+  // 6. Epistemic-debt decay (FPF B.3.4). `debtBudgetDays` = the grace period before an
+  // artifact's `valid_until` counts as overdue-evidence debt (default 0 = overdue on the day).
+  evidence: external_exports.object({ debtBudgetDays: external_exports.number().int().min(0) }).strict().optional()
 }).strict();
 
 // src/adapters/config/FileProjectConfigStore.ts
@@ -8748,6 +8751,7 @@ var path7 = __toESM(require("node:path"));
 var ISSUES_FILE = "created-issues.json";
 var PAGES_FILE = "published-pages.json";
 var PULLED_FILE = "pulled-sources.json";
+var WAIVERS_FILE = "epistemic-debt-waivers.json";
 var SCHEMA_VERSION = 1;
 var FileLedgerStore = class {
   constructor(root, fs2) {
@@ -8837,6 +8841,23 @@ var FileLedgerStore = class {
     await this.writeArray(PULLED_FILE, "pulled", next);
     return true;
   }
+  async readWaivers() {
+    return this.readArray(WAIVERS_FILE, "waivers");
+  }
+  async appendWaiver(row) {
+    const rows = await this.readWaivers();
+    const idx = rows.findIndex((r) => r.subject === row.subject);
+    if (idx >= 0) {
+      const cur = rows[idx];
+      if (cur.reason === row.reason && cur.until === row.until && cur.by === row.by) return false;
+      rows[idx] = row;
+    } else {
+      rows.push(row);
+    }
+    rows.sort((a, b) => a.subject.localeCompare(b.subject));
+    await this.writeArray(WAIVERS_FILE, "waivers", rows);
+    return true;
+  }
 };
 
 // src/adapters/frontmatter/GrayMatterParser.ts
@@ -8882,6 +8903,10 @@ var ProjectConfig = class _ProjectConfig {
   /** OPTIONAL. Never throws (?? {channel:'none'}). */
   notificationTarget() {
     return this.cfg.integrations?.notifications ?? { channel: "none" };
+  }
+  /** OPTIONAL+default. Grace days before `valid_until` counts as overdue-evidence debt (FPF B.3.4). */
+  debtBudgetDays() {
+    return this.cfg.evidence?.debtBudgetDays ?? 0;
   }
   /** REQUIRED-WHEN-USED. Throws exit 2 if absent (no guess). */
   c4() {
@@ -10937,6 +10962,20 @@ async function reportDriverAssurance(deps) {
 }
 
 // src/domain/services/EpistemicDebt.ts
+var DAY_MS = 864e5;
+function carriers(fm) {
+  const out = [];
+  const src = fm.source;
+  if (typeof src === "string" && src) out.push(src);
+  for (const key of ["verified_by", "validated_by"]) {
+    const v = fm[key];
+    if (Array.isArray(v)) {
+      for (const c of v) if (typeof c === "string" && c) out.push(c);
+      else if (typeof v === "string" && v) out.push(v);
+    }
+  }
+  return [...new Set(out)];
+}
 function gatherEpistemicDebt(g, ctx) {
   const rows = [];
   for (const c of gatherSupersededCitations(g)) {
@@ -10956,36 +10995,45 @@ function gatherEpistemicDebt(g, ctx) {
     }
   }
   for (const p of g.pages) {
-    const rb = p.frontmatter.realized_by;
-    if (!Array.isArray(rb)) continue;
-    for (const k of [...new Set(rb.map(String))].sort()) {
-      if (!ctx.ledgerIssueKeys.has(k)) {
-        rows.push({
-          kind: "stale-issue",
-          subject: p.basename,
-          detail: `realized_by ${k} has no ledger row (stale trace)`
-        });
+    const fm = p.frontmatter;
+    const rb = fm.realized_by;
+    if (Array.isArray(rb)) {
+      for (const k of [...new Set(rb.map(String))].sort()) {
+        if (!ctx.ledgerIssueKeys.has(k)) {
+          rows.push({ kind: "stale-issue", subject: p.basename, detail: `realized_by ${k} has no ledger row (stale trace)` });
+        }
+      }
+    }
+    for (const c of carriers(fm)) {
+      if (c.includes("/") && !ctx.fileSet.has(c)) {
+        rows.push({ kind: "missing-source", subject: p.basename, detail: `evidence carrier \`${c}\` no longer exists on disk` });
+      }
+    }
+    if (ctx.now) {
+      const vu = fm.valid_until;
+      if (vu != null && vu !== "") {
+        const t = Date.parse(String(vu));
+        if (Number.isNaN(t)) {
+          rows.push({ kind: "overdue-evidence", subject: p.basename, detail: `unparseable valid_until: ${String(vu)}` });
+        } else {
+          const overdueDays = Math.floor((ctx.now.getTime() - t) / DAY_MS) - (ctx.budgetDays ?? 0);
+          if (overdueDays > 0) {
+            const budget = ctx.budgetDays ? `, budget ${ctx.budgetDays}d` : "";
+            rows.push({ kind: "overdue-evidence", subject: p.basename, detail: `evidence overdue ${overdueDays}d (valid_until ${String(vu)}${budget})` });
+          }
+        }
       }
     }
   }
-  for (const p of g.pages) {
-    const src = p.frontmatter.source;
-    if (typeof src === "string" && src && !ctx.fileSet.has(src)) {
-      rows.push({
-        kind: "missing-source",
-        subject: p.basename,
-        detail: `source \`${src}\` no longer exists on disk`
-      });
-    }
-  }
   const seen = /* @__PURE__ */ new Set();
-  const deduped = rows.filter((r) => {
+  const waived = ctx.waivedSubjects ?? /* @__PURE__ */ new Set();
+  return rows.filter((r) => {
+    if (waived.has(r.subject)) return false;
     const key = `${r.kind}|${r.subject}|${r.detail}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
-  return deduped.sort(
+  }).sort(
     (a, b) => a.kind.localeCompare(b.kind) || a.subject.localeCompare(b.subject) || a.detail.localeCompare(b.detail)
   );
 }
@@ -10999,19 +11047,29 @@ var LABEL2 = {
   "superseded-citation": "Superseded citation",
   "paper-coverage": "Paper coverage",
   "stale-issue": "Stale issue",
-  "missing-source": "Missing source"
+  "missing-source": "Missing source",
+  "overdue-evidence": "Overdue evidence"
 };
 async function updateEpistemicDebt(deps) {
-  const { repo, ledger } = deps;
-  const [pages, files, issues] = await Promise.all([
+  const { repo, ledger, clock } = deps;
+  const [pages, files, issues, waivers] = await Promise.all([
     repo.loadPages(),
     repo.listFiles(),
-    ledger.readIssues()
+    ledger.readIssues(),
+    ledger.readWaivers()
   ]);
+  const now = clock.now();
+  const today = now.toISOString().slice(0, 10);
+  const waivedSubjects = new Set(
+    waivers.filter((w) => w.until == null || String(w.until).slice(0, 10) >= today).map((w) => w.subject)
+  );
   const g = buildGraph(pages);
   const rows = gatherEpistemicDebt(g, {
     ledgerIssueKeys: new Set(issues.map((r) => r.key)),
-    fileSet: new Set(files)
+    fileSet: new Set(files),
+    now,
+    budgetDays: deps.budgetDays ?? 0,
+    waivedSubjects
   });
   const body = rows.map((r) => `- **${LABEL2[r.kind]}** \xB7 [[${r.subject}]] \u2014 ${r.detail}`).join("\n");
   const exists = await repo.exists(FILE3);
@@ -11020,7 +11078,28 @@ async function updateEpistemicDebt(deps) {
   await repo.write(FILE3, next);
   const byKind = {};
   for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
-  return { path: FILE3, created: !exists, debtCount: rows.length, byKind };
+  return { path: FILE3, created: !exists, debtCount: rows.length, waived: waivedSubjects.size, byKind };
+}
+
+// src/application/usecases/Waive.ts
+async function waiveDebt(input, deps) {
+  const subject = input.subject?.trim();
+  if (!subject) throw new DomainError("waive-debt: missing --subject", 1);
+  if (!input.reason?.trim()) throw new DomainError("waive-debt: missing --reason", 1);
+  if (!input.by?.trim()) throw new DomainError("waive-debt: missing --by", 1);
+  const until = input.until ? input.until.trim() : null;
+  if (until != null && Number.isNaN(Date.parse(until))) {
+    throw new DomainError(`waive-debt: --until "${until}" is not a date`, 1);
+  }
+  const row = {
+    subject,
+    reason: input.reason.trim(),
+    until,
+    by: input.by.trim(),
+    waivedAt: deps.clock.now().toISOString()
+  };
+  const recorded = await deps.ledger.appendWaiver(row);
+  return { subject, recorded, until };
 }
 
 // src/domain/services/Adequacy.ts
@@ -11285,7 +11364,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.10.0";
+var PLUGIN_VERSION = "0.11.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -12011,10 +12090,33 @@ async function main() {
       const fs2 = new NodeFileSystem();
       const root = wikiRoot(opts);
       const repo = new FoamWikiRepository(root, fs2);
-      const result = await updateEpistemicDebt({ repo, ledger: new FileLedgerStore(root, fs2) });
+      const result = await updateEpistemicDebt({
+        repo,
+        ledger: new FileLedgerStore(root, fs2),
+        clock: new SystemClock(),
+        budgetDays: (await loadProjectConfig(opts)).debtBudgetDays()
+      });
       emit({ ok: true, command: "update-epistemic-debt", data: result });
     } catch (err) {
       fail("update-epistemic-debt", err);
+    }
+  });
+  cli.command("waive-debt", "record a human-gated epistemic-debt waiver for a subject (FPF B.3.4 CC-ED.5)").option("--subject <id>", "artifact basename whose debt is waived").option("--reason <text>", "why the debt is accepted for now").option("--until <date>", "ISO date the waiver expires (omit for indefinite)").option("--by <who>", "who authorized the waiver (audit)").action(async (opts) => {
+    try {
+      await assertWikiRootExists(opts);
+      const fs2 = new NodeFileSystem();
+      const result = await waiveDebt(
+        {
+          subject: opts.subject ? String(opts.subject) : "",
+          reason: opts.reason ? String(opts.reason) : "",
+          until: opts.until ? String(opts.until) : null,
+          by: opts.by ? String(opts.by) : ""
+        },
+        { ledger: new FileLedgerStore(wikiRoot(opts), fs2), clock: new SystemClock() }
+      );
+      emit({ ok: true, command: "waive-debt", data: result });
+    } catch (err) {
+      fail("waive-debt", err);
     }
   });
   cli.command("adequacy", "score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)").option("--kind <kind>", "restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)").option("--id <id>", "restrict to one artifact by id/basename").action(async (opts) => {
