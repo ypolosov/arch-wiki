@@ -41,6 +41,19 @@ does not restate or fork FPF.
   / `C.32.PAD` (a decision cites its drivers), **not** GR-3 — GR-3 governs framework-family
   editions, not page links.
 
+## Edition discipline (FPF E.4.PFR / G.11)
+
+arch-wiki tracks a **schema version** (`.arch-wiki/version.json`, `CURRENT_SCHEMA_VERSION`). The
+Pattern-Framework edition relations:
+- **Supersession / refresh** — a schema bump is applied by `migrate` (idempotent, writes `.arch-wiki/*`
+  only, never artifacts); `adopt` onboards a legacy wiki and records a lint baseline so a newly-added
+  deterministic rule does not flood a pre-existing corpus.
+- **Refresh conditions (G.11)** — re-cut the schema when the FPF edition changes, or the arc42 / ADD /
+  MADR / C4 state-of-the-art shifts. New lint rules ship low-severity + baseline-suppressible, one wave
+  at a time (no mass churn) — the empirical discipline in `docs/dev/release-loop.md`.
+- **Deprecation** — retire a rule/field by dropping it from the schema + a RELEASE note; the managed
+  registers (`epistemic-debt.md`, `gap-analysis.md`) keep stable markers across editions.
+
 ## Where the kinds are made concrete
 
 - The FPF-kind table: [`schema/CLAUDE.md`](schema/CLAUDE.md) → *Methodology roles (the ontology)*.

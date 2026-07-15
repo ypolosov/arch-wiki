@@ -182,6 +182,8 @@ Audit and report (then propose fixes / append to `risks.md`):
 - arc42 view-hub correspondence (`view-hub-uncorresponded`, low, FPF E.17.0/C.34): an arc42 hub
   tagged `c4` (a **viewpoint binding**) that shows no C4 view — no `## C4 …` section. The `c4` tag is
   the viewpoint↔view correspondence marker; a bound hub must actually present its view.
+- Constraint boundary-norm kind (`constraint-norm-kind-invalid`, medium, FPF A.6.B): a constraint's
+  optional `norm_kind:` frontmatter must be `law` | `admissibility` | `deontic` | `work-effect`.
 - Terminology drift: terms used across pages but absent from `glossary.md` (LLM judgement).
   Deterministic Core checks over the term sheet: `glossary-near-duplicate` (mint-or-reuse, FPF F.8),
   `glossary-term-unlinked` (a term with no managing-page `[[link]]`, F.17), `deprecated-term-without-successor`

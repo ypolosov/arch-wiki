@@ -39,6 +39,10 @@ output, run `arch-wiki lint --json` yourself.
      runs the deterministic term-sheet checks — `glossary-near-duplicate`, `glossary-term-unlinked`,
      `deprecated-term-without-successor`, `entity-without-glossary-term`; you judge the *drift* the
      table can't see: a term used across pages that was never minted into the sheet.)
+   - **Causal claims (FPF C.28)**: in ADR `## Decision Outcome` / `### Consequences` and QA rationale,
+     flag a causal claim ("adopting X reduces latency", "the regression was caused by Y") that outruns
+     its evidence — bound it to what the drivers/measurements support (correlation vs intervention vs
+     mechanism), or route the gap to `risks.md`.
 3. Propose concrete `risks.md` rows for genuine risks/debt.
 
 ## Output

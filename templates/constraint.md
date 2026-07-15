@@ -8,6 +8,11 @@ tags: [con]
 ## Constraint
 
 
+## Boundary Norm
+<!-- FPF A.6.B Boundary Norm Square. Optional frontmatter `norm_kind:` classifies the boundary — so a
+     legal Law, an Admissibility rule, a project policy (Deontic) and a Work-effect don't read alike:
+     norm_kind: law | admissibility | deontic | work-effect   (lint flags an invalid value). -->
+
 ## Rationale
 
 

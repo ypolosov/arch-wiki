@@ -22,7 +22,7 @@ exceptional-quality audit. Reliance: internal (developer). Ceremony: a scan, not
 | Deterministic verdicts | Are verdicts Core-owned, not eyeballed? | ✅ CLI owns lint/assurance/adequacy/c4 |
 | Evidence & assurance | Is coverage graded + decay surfaced (A.10/B.3)? | ✅ AssuranceLevel L0/L1/L2 + epistemic-debt |
 | Self-evaluation present | Can the framework score itself (E.4.DPF.DA)? | ✅ this file + `arch-wiki adequacy` |
-| Edition/refresh discipline | Are refresh conditions written (E.4.PFR/G.11)? | ⚠️ partial — schema versioning yes; PFR relations deferred (W12) |
+| Edition/refresh discipline | Are refresh conditions written (E.4.PFR/G.11)? | ✅ `FRAMEWORK.md` → Edition discipline (supersession/refresh/deprecation) |
 
 ## Principle adequacy (E.2.DA) — the seven engineering principles
 

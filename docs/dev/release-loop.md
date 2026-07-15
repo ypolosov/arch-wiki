@@ -33,6 +33,22 @@
 > Later waves (C4/views, QA templates, projection gate, ADR) carry higher mirror risk — each gets an
 > explicit render-diff proof and a gt-retest callout in its RELEASE note.
 
+## Operational gates (FPF A.21) & projection surfaces
+
+The deterministic verdicts ARE operational gates — pass/fail decisions with logged results:
+`lint` (graph integrity + the wave rules), `validate-c4` (C4 ⟷ wiki), `verify-mirror` (outbound
+faithfulness), `adequacy` (structural floor). Each is register-backed (a JSON envelope, a
+baseline, a managed register) — a "clean" verdict is a *publication* of that source, not a new claim.
+
+Projection surfaces and their faithfulness discipline:
+- **Outbound** — the Confluence mirror (MVPK PlainView): guarded by `verify-mirror` (tiers i/ii).
+- **Inbound** — `pull-stories` snapshots the PO User Story Log (a probe-coupled boundary read,
+  C.26.1): the CLI is the sole authorized writer of `raw/_synced/`, idempotent by contentHash,
+  orphan-reconciled — the inbound analogue of the outbound gate. (A deterministic inbound
+  faithfulness check is a candidate for a future wave.)
+- **DESCRIPTION-USE** — `query` answers from the graph and may persist a `concepts/` page (an
+  EpistemicViewing morphism, A.6.2): persisted answers must carry a `## Sources` provenance trail.
+
 ## Deferred / dropped (with rationale)
 
 - **`driver-depends-on-decision` lint (C.2.P/C.32.PAD)** — *dropped*. FPF would separate problem-side

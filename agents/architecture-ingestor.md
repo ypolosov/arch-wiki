@@ -49,6 +49,12 @@ arc42 map, filename conventions, the wikilink convention, and the invariants.
    — append a row to `docs/architecture/risks.md` (type `Contradiction`) and add a
    short note on the affected page.
 
+## Bias audit (FPF D.5 / E.5.4)
+Extraction is emphasis **and** omission — an ethical act. Do not privilege the loudest source or drop an
+inconvenient constraint; when you emphasise or omit, make it defensible (a recorded rationale, a `risks.md`
+row), never silent. Give cross-disciplinary framings equal footing; a "DevOps"/vendor phrasing is not
+automatically the canon (E.5.4 cross-disciplinary bias audit).
+
 ## Output
 Return a concise report: pages created vs updated, new wikilinks, contradictions
 flagged, and any decisions left as `proposed` that need human ratification.

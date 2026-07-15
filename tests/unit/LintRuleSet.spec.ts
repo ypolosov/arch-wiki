@@ -210,6 +210,19 @@ describe('hypothesis abductive discipline', () => {
   });
 });
 
+describe('constraint boundary-norm kind (FPF A.6.B)', () => {
+  it('flags an invalid norm_kind on a constraint', () => {
+    const g = buildGraph([page('drivers/constraints/CON-001-x.md', { frontmatter: { norm_kind: 'policy' } })]);
+    expect(runLint(g).some((f) => f.rule === 'constraint-norm-kind-invalid')).toBe(true);
+  });
+  it('accepts a valid norm_kind and ignores an absent one', () => {
+    const valid = buildGraph([page('drivers/constraints/CON-001-x.md', { frontmatter: { norm_kind: 'law' } })]);
+    expect(runLint(valid).some((f) => f.rule === 'constraint-norm-kind-invalid')).toBe(false);
+    const absent = buildGraph([page('drivers/constraints/CON-002-y.md', { frontmatter: {} })]);
+    expect(runLint(absent).some((f) => f.rule === 'constraint-norm-kind-invalid')).toBe(false);
+  });
+});
+
 describe('view-hub correspondence', () => {
   it('flags a C4-tagged arc42 hub that shows no C4 view', () => {
     const g = buildGraph([

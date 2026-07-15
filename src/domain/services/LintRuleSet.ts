@@ -252,6 +252,23 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     }
   }
 
+  // 8a. Boundary Norm Square (FPF A.6.B): a constraint's optional `norm_kind` must be one of
+  //     the four boundary-norm kinds — a legal Law, an Admissibility rule, a Deontic policy, or a
+  //     Work-effect. Validates a declared value only (absent = fine); a typo'd kind is a defect.
+  const NORM_KINDS = new Set(['law', 'admissibility', 'deontic', 'work-effect']);
+  for (const p of pagesOfKind(g, ['constraint'])) {
+    const nk = (p.frontmatter as { norm_kind?: unknown }).norm_kind;
+    if (nk == null || nk === '') continue;
+    if (!NORM_KINDS.has(String(nk).toLowerCase())) {
+      findings.push({
+        rule: 'constraint-norm-kind-invalid',
+        severity: 'medium',
+        file: p.relPath,
+        message: `constraint ${p.basename} norm_kind "${String(nk)}" is not one of law|admissibility|deontic|work-effect (FPF A.6.B)`,
+      });
+    }
+  }
+
   // 8. Structural-view correspondence (FPF E.17.0 / C.34): an arc42 hub bound to a C4
   //    viewpoint (tag `c4`) must actually SHOW its view — a `## C4 …` section. The `c4`
   //    tag is the viewpoint binding; a C4 section is the view↔viewpoint correspondence.

@@ -10682,6 +10682,19 @@ function runLint(g, ctx = {}) {
       });
     }
   }
+  const NORM_KINDS = /* @__PURE__ */ new Set(["law", "admissibility", "deontic", "work-effect"]);
+  for (const p of pagesOfKind(g, ["constraint"])) {
+    const nk = p.frontmatter.norm_kind;
+    if (nk == null || nk === "") continue;
+    if (!NORM_KINDS.has(String(nk).toLowerCase())) {
+      findings.push({
+        rule: "constraint-norm-kind-invalid",
+        severity: "medium",
+        file: p.relPath,
+        message: `constraint ${p.basename} norm_kind "${String(nk)}" is not one of law|admissibility|deontic|work-effect (FPF A.6.B)`
+      });
+    }
+  }
   for (const p of pagesOfKind(g, ["arc42"])) {
     const tags = p.frontmatter.tags;
     const isC4Hub = Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === "c4");
@@ -11611,7 +11624,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.18.0";
+var PLUGIN_VERSION = "0.19.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
