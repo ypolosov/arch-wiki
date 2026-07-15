@@ -20,6 +20,8 @@ export interface ScaffoldInput {
   frontmatter?: Record<string, unknown>;
   /** Forces the filename stem (e.g. `hypothesis-<slug>`); slug still required. */
   slugPrefix?: string;
+  /** Extra markdown appended to the rendered body (e.g. a ProblemCard on a hypothesis). */
+  appendBody?: string;
   dryRun?: boolean;
 }
 
@@ -116,11 +118,16 @@ export async function scaffoldArtifact(
     };
   }
 
+  // Append extra body sections (e.g. a hypothesis ProblemCard) after the template body.
+  const bodyOutput = input.appendBody?.trim()
+    ? `${output.replace(/\s+$/, '')}\n\n${input.appendBody.trim()}\n`
+    : output;
+
   // Inject typed frontmatter over the rendered template's YAML. Skipped when no
   // fields are supplied so the plain-scaffold output stays byte-identical.
-  let finalOutput = output;
+  let finalOutput = bodyOutput;
   if (input.frontmatter && Object.keys(input.frontmatter).length > 0) {
-    const doc = frontmatter.parse(output);
+    const doc = frontmatter.parse(bodyOutput);
     const merged = deepMerge(doc.frontmatter, input.frontmatter);
     finalOutput = frontmatter.stringify({ frontmatter: merged, content: doc.content });
   }

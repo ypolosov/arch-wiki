@@ -185,6 +185,31 @@ describe('required-section rule', () => {
   });
 });
 
+describe('hypothesis abductive discipline', () => {
+  it('flags a hypothesis with no Acceptance probe and no Rival', () => {
+    const g = buildGraph([
+      page('concepts/hypothesis-x.md', { frontmatter: { status: 'hypothesis' }, headings: ['Hypothesis'] }),
+    ]);
+    const rules = runLint(g).map((f) => f.rule);
+    expect(rules).toContain('hypothesis-unfalsifiable');
+    expect(rules).toContain('hypothesis-no-rival');
+  });
+
+  it('passes a hypothesis carrying Acceptance probe + Rival fields', () => {
+    const g = buildGraph([
+      page('concepts/hypothesis-x.md', { frontmatter: { status: 'hypothesis' }, labels: ['Acceptance probe', 'Rival'] }),
+    ]);
+    const rules = runLint(g).map((f) => f.rule);
+    expect(rules).not.toContain('hypothesis-unfalsifiable');
+    expect(rules).not.toContain('hypothesis-no-rival');
+  });
+
+  it('ignores non-hypothesis pages', () => {
+    const g = buildGraph([page('concepts/x.md', { frontmatter: {} })]);
+    expect(runLint(g).some((f) => f.rule.startsWith('hypothesis-'))).toBe(false);
+  });
+});
+
 describe('baselineKey', () => {
   it('is marker-independent for required-section rules (key on rule|file|kind)', () => {
     const file = 'drivers/quality-attributes/QA-020-x.md';

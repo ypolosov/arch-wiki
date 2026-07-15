@@ -43,6 +43,10 @@ describe('scaffoldHypothesis (integration)', () => {
     expect(content).toContain('status: hypothesis');
     expect(content).toContain('realizes_driver:');
     expect(content).toContain('QA-007');
+    // ProblemCard (FPF C.22.2) is appended to the hypothesis body.
+    expect(content).toContain('## Problem Card');
+    expect(content).toContain('**Acceptance probe:**');
+    expect(content).toContain('**Rival:**');
   });
 
   it('fix #2: a kanban-linked hypothesis is NOT an orphan, unlike a bare concept', async () => {
@@ -66,6 +70,8 @@ describe('scaffoldHypothesis (integration)', () => {
     expect(
       repB.findings.some((f) => f.rule === 'orphan' && f.file === hyp.path),
     ).toBe(false);
+    // The scaffolded ProblemCard satisfies the abductive lint (Acceptance probe + Rival present).
+    expect(repB.findings.some((f) => f.rule.startsWith('hypothesis-') && f.file === hyp.path)).toBe(false);
   });
 
   it('rejects a --from that does not exist (exit 2)', async () => {

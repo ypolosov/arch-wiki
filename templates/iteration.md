@@ -7,6 +7,9 @@ tags: [iteration]
 
 - **Date:** {{date}}
 
+## Observation / Trigger
+<!-- FPF B.4 (Evolution Loop): what was observed/noticed that prompts this ADD iteration. -->
+
 ## Drivers Addressed
 {{drivers}}
 
@@ -16,5 +19,8 @@ tags: [iteration]
 ## Drivers Impact
 | Driver | Before | After |
 |---|---|---|
+
+## Transformer
+<!-- FPF B.4 / A.3: the named method/agent (ADD loop) that enacted this iteration. -->
 
 ## Notes

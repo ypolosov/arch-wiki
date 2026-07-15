@@ -40,3 +40,12 @@ Response, Measure** — the Measure must be testable (e.g. "p95 < 200ms"). See t
 - ADD outputs **live in arc42** sections (the container).
 - Iterations capture *which drivers moved from partial → complete* (see ITER-01's
   Drivers Impact table) — this feeds gap analysis and `/arch-wiki:lint`.
+
+## FPF loop framing (naming, no new statuses)
+
+The ADD iteration is FPF's **Evolution Loop** (B.4: Observe → Notice → Stabilize → Route) driving the
+**Reasoning Cycle** (B.5.1: Explore → Shape → Evidence → Operate). A hypothesis is an **abduction**
+(B.5.2): it must carry a falsification criterion (*Acceptance probe*) and a named *Rival* — the
+`/arch-wiki:hypothesis` ProblemCard (C.22.2), asserted by `hypothesis-unfalsifiable` /
+`hypothesis-no-rival` lint. An iteration's *Observation / Trigger* records the Observe step; its
+*Transformer* names the enacting method (A.3). These are lenses on the existing loop — no new statuses.

@@ -228,6 +228,30 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     }
   }
 
+  // 7. Abductive discipline (FPF B.5.2 / C.22.2): a hypothesis must be falsifiable and name a rival.
+  for (const p of g.pages) {
+    const status = String((p.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
+    if (status !== 'hypothesis') continue;
+    const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
+    const has = (m: string): boolean => sections.has(normalizeSection(m));
+    if (!has('Acceptance probe') && !has('Refutation')) {
+      findings.push({
+        rule: 'hypothesis-unfalsifiable',
+        severity: 'low',
+        file: p.relPath,
+        message: `hypothesis ${p.basename} states no Acceptance probe / Refutation (unfalsifiable, FPF B.5.2)`,
+      });
+    }
+    if (!has('Rival')) {
+      findings.push({
+        rule: 'hypothesis-no-rival',
+        severity: 'low',
+        file: p.relPath,
+        message: `hypothesis ${p.basename} names no Rival (abductive discipline, FPF B.5.2)`,
+      });
+    }
+  }
+
   return sortFindings(findings);
 }
 

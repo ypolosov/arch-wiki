@@ -9119,9 +9119,13 @@ async function scaffoldArtifact(input, deps) {
       warnings
     };
   }
-  let finalOutput = output;
+  const bodyOutput = input.appendBody?.trim() ? `${output.replace(/\s+$/, "")}
+
+${input.appendBody.trim()}
+` : output;
+  let finalOutput = bodyOutput;
   if (input.frontmatter && Object.keys(input.frontmatter).length > 0) {
-    const doc = frontmatter.parse(output);
+    const doc = frontmatter.parse(bodyOutput);
     const merged = deepMerge(doc.frontmatter, input.frontmatter);
     finalOutput = frontmatter.stringify({ frontmatter: merged, content: doc.content });
   }
@@ -9203,6 +9207,26 @@ async function updateKanban(input, deps) {
 }
 
 // src/application/usecases/ScaffoldHypothesis.ts
+var PROBLEM_CARD = [
+  "## Problem Card",
+  "<!-- FPF C.22.2 / B.5.2 \u2014 shape the problem before it becomes a driver.",
+  "     Line-start bold labels so `arch-wiki lint` sees the Acceptance-probe / Rival fields. -->",
+  "",
+  "**Prompt:** ",
+  "",
+  "**Scope cut:** ",
+  "",
+  "**Why not just a wish:** ",
+  "",
+  "**Rival:** ",
+  "",
+  "**Acceptance probe:** ",
+  "",
+  "**Next use:** ",
+  "",
+  "## Hypothesis",
+  "<!-- assumption \xB7 rationale \xB7 what would validate / refute it (English canon) -->"
+].join("\n");
 async function scaffoldHypothesis(input, deps) {
   const { repo } = deps;
   if (!input.title?.trim()) throw new DomainError("hypothesis: missing --title", 1);
@@ -9219,6 +9243,7 @@ async function scaffoldHypothesis(input, deps) {
       slug: input.slug,
       slugPrefix: "hypothesis",
       frontmatter,
+      appendBody: PROBLEM_CARD,
       dryRun: input.dryRun
     },
     deps
@@ -10615,6 +10640,28 @@ function runLint(g, ctx = {}) {
       }
     }
   }
+  for (const p of g.pages) {
+    const status = String(p.frontmatter.status ?? "").toLowerCase();
+    if (status !== "hypothesis") continue;
+    const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
+    const has = (m) => sections.has(normalizeSection(m));
+    if (!has("Acceptance probe") && !has("Refutation")) {
+      findings.push({
+        rule: "hypothesis-unfalsifiable",
+        severity: "low",
+        file: p.relPath,
+        message: `hypothesis ${p.basename} states no Acceptance probe / Refutation (unfalsifiable, FPF B.5.2)`
+      });
+    }
+    if (!has("Rival")) {
+      findings.push({
+        rule: "hypothesis-no-rival",
+        severity: "low",
+        file: p.relPath,
+        message: `hypothesis ${p.basename} names no Rival (abductive discipline, FPF B.5.2)`
+      });
+    }
+  }
   return sortFindings(findings);
 }
 var MARKER_INDEPENDENT_RULES = /* @__PURE__ */ new Set(["missing-required-section", "required-section-underlinked"]);
@@ -11453,7 +11500,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.12.0";
+var PLUGIN_VERSION = "0.13.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
