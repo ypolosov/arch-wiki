@@ -14,4 +14,6 @@ arc42 hub backlink — never compute these by hand.
 3. From the JSON result, report `data.path`.
 4. Following the `add-method` skill, help fill the body. For `qa`, ensure the
    scenario has all six parts (Source/Stimulus/Artifact/Environment/Response/
-   **testable Measure**). Suggest related drivers/ADRs to cross-link.
+   **testable Measure** — a numeric threshold, else `lint` flags `qa-measure-untestable`) and
+   unpack the **Quality Bundle** (Characteristic·Scale·Polarity·Target·Window·Scope — FPF C.25/A.18/A.2.6).
+   Suggest related drivers/ADRs to cross-link.

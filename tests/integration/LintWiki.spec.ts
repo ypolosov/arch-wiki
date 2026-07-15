@@ -106,4 +106,15 @@ describe('lintWiki (integration)', () => {
     const afterEdit = await lintWiki(repo, { config: configWith('C4 Elements:') });
     expect(afterEdit.findings.some((f) => f.rule === 'missing-required-section')).toBe(false);
   });
+
+  it('flags a QA whose stated Measure carries no numeric threshold (FPF C.16)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/quality-attributes/QA-030-x.md'),
+      '---\ntype: quality-attribute\n---\n# QA-030\n\n## Scenario\n- **Measure:** fast and reliable\n',
+    );
+    const report = await lintWiki(new FoamWikiRepository(root, sys));
+    expect(report.findings.some((f) => f.rule === 'qa-measure-untestable')).toBe(true);
+  });
 });

@@ -162,6 +162,10 @@ each updated only via the CLI — never edited by hand:
 Audit and report (then propose fixes / append to `risks.md`):
 - Orphan pages and broken wikilinks / unresolved placeholders.
 - QA scenario with no linked ADR **or** no linked C4 element.
+- QA Measure well-formedness (`qa-measure-untestable`, low, FPF C.16): a stated Measure that carries
+  no numeric threshold — a wish, not a Characteristic on a Scale. Unpack the "-ility" via the QA
+  template's **Quality Bundle** (Characteristic · Scale · Polarity · Target · Window · Scope —
+  FPF C.25 / A.18 / A.2.6 USM).
 - Driver (UC/QA/CON/CONC) with no coverage in any ADR/iteration (gap analysis).
 - Driver **live-covered only by non-accepted** ADR(s) — "paper coverage": a `proposed`/
   `superseded`/`deprecated` decision does not *live-cover* a driver (`driver-not-live-covered`,

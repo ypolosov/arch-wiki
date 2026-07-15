@@ -12,6 +12,8 @@ import {
   SupersededCitation,
 } from '../../domain/services/LintRuleSet';
 import { glossaryFindings, parseTermSheet } from '../../domain/services/Glossary';
+import { qaMeasureFinding } from '../../domain/services/QualityAttribute';
+import { kindOfPage } from '../../domain/model/WikiPage';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
@@ -58,6 +60,13 @@ export async function lintWiki(
     const gf = glossaryFindings(parseTermSheet(await repo.read(glossaryPage.relPath)), graph);
     if (gf.length) findings = sortFindings([...findings, ...gf]);
   }
+
+  // QA measure well-formedness (FPF C.16): a stated Measure must carry a numeric threshold.
+  const qaPages = pages.filter((p) => kindOfPage(p) === 'quality-attribute');
+  const qaFindings = (
+    await Promise.all(qaPages.map(async (p) => qaMeasureFinding(p.basename, p.relPath, await repo.read(p.relPath))))
+  ).filter((f): f is NonNullable<typeof f> => f != null);
+  if (qaFindings.length) findings = sortFindings([...findings, ...qaFindings]);
 
   // Suppress findings recorded as a pre-existing baseline at adoption time.
   if (baselineList.length) {

@@ -10797,6 +10797,29 @@ function glossaryFindings(terms, g) {
   return out;
 }
 
+// src/domain/services/QualityAttribute.ts
+function extractMeasure(content) {
+  for (const line of content.split("\n")) {
+    const tbl = line.match(/^\s*\|\s*\*{0,2}\s*measure\s*\*{0,2}\s*\|(.+?)\|/i);
+    if (tbl) return tbl[1].trim();
+    const lbl = line.match(/^\s*-?\s*\*\*\s*measure\s*:?\s*\*\*\s*(.*)$/i);
+    if (lbl) return lbl[1].trim();
+  }
+  return null;
+}
+function qaMeasureFinding(basename2, relPath, content) {
+  const measure = extractMeasure(content);
+  if (measure && measure.length <= 40 && !/\d/.test(measure) && !/[<>=≤≥%]/.test(measure)) {
+    return {
+      rule: "qa-measure-untestable",
+      severity: "low",
+      file: relPath,
+      message: `QA ${basename2} Measure "${measure}" looks like a wish \u2014 no numeric threshold (FPF C.16)`
+    };
+  }
+  return null;
+}
+
 // src/application/usecases/LintWiki.ts
 async function lintWiki(repo, opts = {}) {
   const [pages, allFilesList, baselineList] = await Promise.all([
@@ -10818,6 +10841,9 @@ async function lintWiki(repo, opts = {}) {
     const gf = glossaryFindings(parseTermSheet(await repo.read(glossaryPage.relPath)), graph);
     if (gf.length) findings = sortFindings([...findings, ...gf]);
   }
+  const qaPages = pages.filter((p) => kindOfPage(p) === "quality-attribute");
+  const qaFindings = (await Promise.all(qaPages.map(async (p) => qaMeasureFinding(p.basename, p.relPath, await repo.read(p.relPath))))).filter((f) => f != null);
+  if (qaFindings.length) findings = sortFindings([...findings, ...qaFindings]);
   if (baselineList.length) {
     const baseline = new Set(baselineList);
     findings = findings.filter((f) => !baseline.has(baselineKey(f)));
@@ -11522,7 +11548,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.15.0";
+var PLUGIN_VERSION = "0.16.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
