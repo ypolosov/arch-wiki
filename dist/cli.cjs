@@ -9388,6 +9388,110 @@ function pagesOfKind(g, kinds) {
   });
 }
 
+// src/domain/services/Levenshtein.ts
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let curr = new Array(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+// src/domain/services/Glossary.ts
+function splitRow(row) {
+  return row.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+function parseTermSheet(markdown) {
+  const terms = [];
+  let cols = null;
+  for (const line of markdown.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("|")) {
+      cols = null;
+      continue;
+    }
+    const cells = splitRow(t);
+    if (!cols) {
+      const lower = cells.map((c) => c.toLowerCase());
+      if (lower.includes("term") && lower.includes("definition")) cols = lower;
+      continue;
+    }
+    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
+    const get = (name) => {
+      const i = cols.indexOf(name);
+      return i >= 0 ? cells[i] ?? "" : "";
+    };
+    const termRaw = get("term");
+    const term = termRaw.replace(/\*\*/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, "$1").trim();
+    if (!term) continue;
+    const context = cols.includes("context") ? get("context").replace(/\*\*/g, "").trim() || void 0 : void 0;
+    const status = cols.includes("status") ? get("status").replace(/\*\*/g, "").trim().toLowerCase() || void 0 : void 0;
+    const links = [...`${termRaw} ${get("definition")}`.matchAll(/\[\[([^\]|#]+)/g)].map((m) => m[1].trim());
+    terms.push({ term, context, definition: get("definition"), status, links: [...new Set(links)] });
+  }
+  return terms;
+}
+var FILE = "glossary.md";
+function glossaryFindings(terms, g) {
+  const out = [];
+  for (let i = 0; i < terms.length; i++) {
+    for (let j = i + 1; j < terms.length; j++) {
+      const a = terms[i].term;
+      const b = terms[j].term;
+      if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 2) continue;
+      if (a.toLowerCase() !== b.toLowerCase() && levenshtein(a.toLowerCase(), b.toLowerCase()) <= 2) {
+        out.push({
+          rule: "glossary-near-duplicate",
+          severity: "low",
+          file: FILE,
+          message: `terms "${a}" and "${b}" are near-duplicates (Levenshtein \u2264 2) \u2014 mint-or-reuse?`
+        });
+      }
+    }
+  }
+  for (const t of terms) {
+    if (t.links.length === 0) {
+      out.push({
+        rule: "glossary-term-unlinked",
+        severity: "low",
+        file: FILE,
+        message: `term "${t.term}" links no managing page ([[\u2026]])`
+      });
+    }
+    if ((t.status === "deprecated" || t.status === "retired") && t.links.length === 0) {
+      out.push({
+        rule: "deprecated-term-without-successor",
+        severity: "medium",
+        file: FILE,
+        message: `${t.status} term "${t.term}" links no successor`
+      });
+    }
+  }
+  const covered = new Set(terms.flatMap((t) => t.links));
+  for (const p of pagesOfKind(g, ["entity"])) {
+    if (!covered.has(p.basename)) {
+      out.push({
+        rule: "entity-without-glossary-term",
+        severity: "low",
+        file: p.relPath,
+        message: `entity ${p.basename} is not referenced by any glossary term`
+      });
+    }
+  }
+  return out;
+}
+
 // src/domain/services/ConfluenceTree.ts
 var DEFAULT_EXCLUDE = {
   statuses: ["proposed", "rejected"],
@@ -9767,6 +9871,10 @@ function extractGlossaryTerms(glossaryMarkdown) {
   const terms = /* @__PURE__ */ new Set();
   for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
     const t = m[1].trim();
+    if (t) terms.add(t);
+  }
+  for (const row of parseTermSheet(glossaryMarkdown)) {
+    const t = row.term.trim();
     if (t) terms.add(t);
   }
   return [...terms].sort((a, b) => a.localeCompare(b));
@@ -10504,26 +10612,6 @@ var BooksRagPlanner = class {
   }
 };
 
-// src/domain/services/Levenshtein.ts
-function levenshtein(a, b) {
-  if (a === b) return 0;
-  const m = a.length;
-  const n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  let prev = Array.from({ length: n + 1 }, (_, i) => i);
-  let curr = new Array(n + 1).fill(0);
-  for (let i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[n];
-}
-
 // src/domain/services/PathUtil.ts
 function isProtectedWritePath(p) {
   const posix2 = p.split("\\").join("/");
@@ -10792,90 +10880,6 @@ function sortFindings(findings) {
   return [...findings].sort(
     (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.rule.localeCompare(b.rule) || (a.file ?? "").localeCompare(b.file ?? "") || a.message.localeCompare(b.message)
   );
-}
-
-// src/domain/services/Glossary.ts
-function splitRow(row) {
-  return row.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
-}
-function parseTermSheet(markdown) {
-  const terms = [];
-  let cols = null;
-  for (const line of markdown.split("\n")) {
-    const t = line.trim();
-    if (!t.startsWith("|")) {
-      cols = null;
-      continue;
-    }
-    const cells = splitRow(t);
-    if (!cols) {
-      const lower = cells.map((c) => c.toLowerCase());
-      if (lower.includes("term") && lower.includes("definition")) cols = lower;
-      continue;
-    }
-    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
-    const get = (name) => {
-      const i = cols.indexOf(name);
-      return i >= 0 ? cells[i] ?? "" : "";
-    };
-    const termRaw = get("term");
-    const term = termRaw.replace(/\*\*/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, "$1").trim();
-    if (!term) continue;
-    const context = cols.includes("context") ? get("context").replace(/\*\*/g, "").trim() || void 0 : void 0;
-    const status = cols.includes("status") ? get("status").replace(/\*\*/g, "").trim().toLowerCase() || void 0 : void 0;
-    const links = [...`${termRaw} ${get("definition")}`.matchAll(/\[\[([^\]|#]+)/g)].map((m) => m[1].trim());
-    terms.push({ term, context, definition: get("definition"), status, links: [...new Set(links)] });
-  }
-  return terms;
-}
-var FILE = "glossary.md";
-function glossaryFindings(terms, g) {
-  const out = [];
-  for (let i = 0; i < terms.length; i++) {
-    for (let j = i + 1; j < terms.length; j++) {
-      const a = terms[i].term;
-      const b = terms[j].term;
-      if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 2) continue;
-      if (a.toLowerCase() !== b.toLowerCase() && levenshtein(a.toLowerCase(), b.toLowerCase()) <= 2) {
-        out.push({
-          rule: "glossary-near-duplicate",
-          severity: "low",
-          file: FILE,
-          message: `terms "${a}" and "${b}" are near-duplicates (Levenshtein \u2264 2) \u2014 mint-or-reuse?`
-        });
-      }
-    }
-  }
-  for (const t of terms) {
-    if (t.links.length === 0) {
-      out.push({
-        rule: "glossary-term-unlinked",
-        severity: "low",
-        file: FILE,
-        message: `term "${t.term}" links no managing page ([[\u2026]])`
-      });
-    }
-    if ((t.status === "deprecated" || t.status === "retired") && t.links.length === 0) {
-      out.push({
-        rule: "deprecated-term-without-successor",
-        severity: "medium",
-        file: FILE,
-        message: `${t.status} term "${t.term}" links no successor`
-      });
-    }
-  }
-  const covered = new Set(terms.flatMap((t) => t.links));
-  for (const p of pagesOfKind(g, ["entity"])) {
-    if (!covered.has(p.basename)) {
-      out.push({
-        rule: "entity-without-glossary-term",
-        severity: "low",
-        file: p.relPath,
-        message: `entity ${p.basename} is not referenced by any glossary term`
-      });
-    }
-  }
-  return out;
 }
 
 // src/domain/services/QualityAttribute.ts
@@ -11616,6 +11620,7 @@ function computeAdequacy(g, ctx = {}) {
   const out = [];
   for (const p of pagesOfKind(g, SCORED_KINDS)) {
     const kind = kindOfPage(p);
+    if (kind === "adr" && /^0{3,4}($|-)/.test(p.basename)) continue;
     const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
     const linksDrivers = p.links.filter((l) => driverSet.has(l.target)).length;
     const linksAdrs = p.links.filter((l) => adrSet.has(l.target)).length;
@@ -11854,7 +11859,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.21.0";
+var PLUGIN_VERSION = "0.22.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

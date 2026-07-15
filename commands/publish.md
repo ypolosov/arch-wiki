@@ -94,7 +94,8 @@ is deferred). `data.pages[].warnings` lists the stubbed sources.
 canon stays English in git. For each page, BEFORE publishing, translate its `body` to `data.language`:
 translate prose, headings and link **labels**; keep **verbatim** every `%%AWP<n>%%` placeholder. Core masks
 code / link-URLs / artifact-ids **and** every `data.preserveTerms` term (config `confluence.preserveTerms` +
-glossary bold terms) into those placeholders — so protected content is enforced by Core, NOT left to the
+glossary **bold** terms **and every Term-sheet Term-column entry**, v0.22) into those placeholders — so a
+plain multi-word glossary term stays English too; protected content is enforced by Core, NOT left to the
 translator's discretion (`data.preserveTerms` is informational: it lists what was masked). Then restore the
 placeholders deterministically — pipe the translated body back through Core:
 `arch-wiki finalize-confluence --source <relPath> --plan /tmp/aw-mirror.json < translated.md` → publish the

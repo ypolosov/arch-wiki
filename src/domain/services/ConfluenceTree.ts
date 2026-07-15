@@ -1,6 +1,7 @@
 import { ArtifactKind } from '../model/ArtifactType';
 import { GraphSnapshot } from '../model/Graph';
 import { WikiPage, kindOfPage } from '../model/WikiPage';
+import { parseTermSheet } from './Glossary';
 
 /**
  * Pure helpers for the Confluence KB mirror (CAP-2). Decide page visibility,
@@ -793,13 +794,22 @@ export function applyRestore(
 }
 
 /**
- * Best-effort glossary terms = every **bold** span in `glossary.md`. These are merged
- * into the translation denylist (`preserveTerms`) so domain/IT terms stay English. Pure.
+ * Glossary terms merged into the translation denylist (`preserveTerms`) so domain/IT terms stay
+ * English in the RU projection. Two sources (FPF F.17 Unified Term Sheet):
+ *   1. every **bold** span anywhere in `glossary.md` (an emphasized term in prose or a cell);
+ *   2. every **Term-column** entry of the term sheet — a plain, possibly multi-word term that
+ *      carries no bold markup would otherwise be translated. `parseTermSheet` already strips the
+ *      `**`/wikilink-alias decoration from the Term cell, so the canon term is masked verbatim.
+ * Pure; deterministic (sorted, de-duplicated).
  */
 export function extractGlossaryTerms(glossaryMarkdown: string): string[] {
   const terms = new Set<string>();
   for (const m of glossaryMarkdown.matchAll(/\*\*(.+?)\*\*/g)) {
     const t = m[1]!.trim();
+    if (t) terms.add(t);
+  }
+  for (const row of parseTermSheet(glossaryMarkdown)) {
+    const t = row.term.trim();
     if (t) terms.add(t);
   }
   return [...terms].sort((a, b) => a.localeCompare(b));

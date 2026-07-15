@@ -99,6 +99,10 @@ export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): Ar
   const out: ArtifactAdequacy[] = [];
   for (const p of pagesOfKind(g, SCORED_KINDS)) {
     const kind = kindOfPage(p)!;
+    // The MADR template lives in the reserved all-zeros ADR slot (`0000-template`; real ADRs start at
+    // 0001). It is a skeleton — placeholder drivers, a status listing every lifecycle value — never a
+    // decision to score. Excluded from the adequacy floor (a gt review flagged it as a false inadequate).
+    if (kind === 'adr' && /^0{3,4}($|-)/.test(p.basename)) continue;
     const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
     const linksDrivers = p.links.filter((l) => driverSet.has(l.target)).length;
     const linksAdrs = p.links.filter((l) => adrSet.has(l.target)).length;

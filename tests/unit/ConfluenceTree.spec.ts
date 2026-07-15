@@ -797,4 +797,22 @@ describe('ConfluenceTree.extractGlossaryTerms', () => {
     const md = '# Glossary\n\n- **wager** — a bet\n- **KYC** — identity check\n- **wager** again\n';
     expect(extractGlossaryTerms(md)).toEqual(['KYC', 'wager']);
   });
+
+  it('also collects Term-column entries of the Unified Term Sheet (plain, multi-word)', () => {
+    // A plain (non-bold) multi-word Term-column entry would be translated in RU without this.
+    const md = [
+      '# Glossary',
+      '',
+      '| Term | Context | Definition |',
+      '| --- | --- | --- |',
+      '| Sweep Coins | gaming | the free-play currency |', // plain multi-word — the win
+      '| GC | gaming | gold coins |',
+      '| **Balance** | rmg | the RMG wallet |', // bold in-cell → caught by both passes, deduped
+    ].join('\n');
+    expect(extractGlossaryTerms(md)).toEqual(['Balance', 'GC', 'Sweep Coins']);
+  });
+
+  it('returns [] for a glossary with neither bold spans nor a term sheet', () => {
+    expect(extractGlossaryTerms('# Glossary\n\nNo terms yet.\n')).toEqual([]);
+  });
 });

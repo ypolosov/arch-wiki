@@ -224,7 +224,10 @@ Per-kind structural adequacy of design artifacts (FPF C.32.ADA decision-adequacy
   `inadequate`) from checkable `bases` — a **capped structural floor, not a quality score**. `inadequate`
   = a *critical* base fails (ADR with no Decision Outcome / no options / invalid status; a driver at
   AssuranceLevel L0); `thin` = only non-critical bases fail. Bases compose the wave's evidence signals
-  (a driver's `covered` base reads its AssuranceLevel; `no-debt` reads `epistemic-debt`).
+  (a driver's `covered` base reads its AssuranceLevel; `no-debt` reads `epistemic-debt`). The `options`
+  base accepts the MADR-canonical `## Considered Options`, synonym headings (`## Alternatives Considered`,
+  `## Options Considered`, `## Alternatives`) and an `### Option N`/`### Alternative N` sub-block layout
+  (v0.22); the reserved MADR template slot `0000-template` is a skeleton and is NOT scored.
 - The `/arch-wiki:review` command adds the **judgement** the Core cannot (are the options distinct, the
   measure testable, the consequences balanced) via the `adequacy-rubric` skill — read-only, proposes fixes.
 
@@ -260,7 +263,8 @@ pass them as `${ENV}`. Commands that need one (`render-issue`, `publish`) first
 projection: the canon stays English in `docs/architecture/**`, and `publish` translates prose / headings /
 link-labels **and the page title** (label only — the `UC-014:` id prefix stays byte-exact) at publish time
 while Core **masks** structural spans (code, link URLs, artifact ids) AND every term in
-`integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` — into opaque placeholders,
+`integrations.confluence.preserveTerms` — plus **bold** terms from `glossary.md` **and every Term-column entry
+of the Unified Term Sheet** (v0.22, so a plain multi-word glossary term stays English too) — into opaque placeholders,
 so they survive translation byte-exact by Core enforcement (not by the translator's discretion). The content
 hash is over the English source, so a translated mirror never drifts on its own; a not-yet-published
 cross-link is reserved as a `…/pages/pending` masked link so the translation is reused across the 2-pass

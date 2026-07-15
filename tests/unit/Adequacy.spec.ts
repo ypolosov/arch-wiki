@@ -80,6 +80,15 @@ describe('computeAdequacy', () => {
     expect(adr.band).toBe('inadequate');
   });
 
+  it('excludes the MADR template (0000 slot) from scoring — not a decision', () => {
+    // 0000-template is a skeleton (placeholder drivers, all-statuses) — never a scored ADR.
+    const g = buildGraph([page('adrs/0000-template.md', { frontmatter: { status: 'proposed' }, headings: [] })]);
+    expect(computeAdequacy(g).find((a) => a.id === '0000-template')).toBeUndefined();
+    // a real numbered ADR is still scored
+    const g2 = buildGraph([page('adrs/0001-x.md', { frontmatter: { status: 'accepted' }, headings: [] })]);
+    expect(computeAdequacy(g2).find((a) => a.id === '0001-x')).toBeDefined();
+  });
+
   it('ADR with an invalid status → inadequate', () => {
     expect(adrOf(buildGraph([fullAdr({ frontmatter: { status: 'draft' } }), driverPage])).band).toBe('inadequate');
   });
