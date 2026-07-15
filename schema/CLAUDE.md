@@ -172,6 +172,10 @@ Audit and report (then propose fixes / append to `risks.md`):
   low; FPF B.3.3 assurance-from-evidence / A.2.4 status-is-not-authority). It is not a hard
   gap (an inbound decision exists) but it is not yet a ratified one.
 - ADR with `status: superseded`/`deprecated` but no link to its successor.
+- Accepted ADR with an empty candidate set (`adr-options-empty`, low, FPF C.32.ADA): a present but
+  empty `## Considered Options` section — a decision recorded with no alternatives (robust to any
+  option format). An ABSENT section is left to `/arch-wiki:review` adequacy; whether a *filled* set is
+  substantive/distinct is an LLM judgement, not a deterministic count.
 - C4 element ⟷ wiki entity drift — the **deterministic verdict is
   `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this
   LLM-lint line only adds nuance the rule cannot judge.

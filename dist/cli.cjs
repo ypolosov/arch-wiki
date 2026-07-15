@@ -10840,6 +10840,37 @@ function qaMeasureFinding(basename2, relPath, content) {
   return null;
 }
 
+// src/domain/services/DecisionRecord.ts
+function optionsSectionState(content) {
+  let inSection = false;
+  let found = false;
+  let hasContent = false;
+  for (const line of content.split("\n")) {
+    const t = line.trim();
+    if (/^##\s+considered\s+options\b/i.test(t)) {
+      inSection = true;
+      found = true;
+      continue;
+    }
+    if (inSection && /^##\s/.test(t)) break;
+    if (inSection && t && !t.startsWith("<!--")) hasContent = true;
+  }
+  if (!found) return "absent";
+  return hasContent ? "filled" : "empty";
+}
+function adrOptionsEmptyFinding(basename2, relPath, status, content) {
+  if (status.toLowerCase() !== "accepted") return null;
+  if (optionsSectionState(content) === "empty") {
+    return {
+      rule: "adr-options-empty",
+      severity: "low",
+      file: relPath,
+      message: `accepted ADR ${basename2} has an empty Considered Options section \u2014 no candidate set (FPF C.32.ADA)`
+    };
+  }
+  return null;
+}
+
 // src/application/usecases/LintWiki.ts
 async function lintWiki(repo, opts = {}) {
   const [pages, allFilesList, baselineList] = await Promise.all([
@@ -10864,6 +10895,18 @@ async function lintWiki(repo, opts = {}) {
   const qaPages = pages.filter((p) => kindOfPage(p) === "quality-attribute");
   const qaFindings = (await Promise.all(qaPages.map(async (p) => qaMeasureFinding(p.basename, p.relPath, await repo.read(p.relPath))))).filter((f) => f != null);
   if (qaFindings.length) findings = sortFindings([...findings, ...qaFindings]);
+  const adrPages = pages.filter((p) => kindOfPage(p) === "adr");
+  const adrFindings = (await Promise.all(
+    adrPages.map(
+      async (p) => adrOptionsEmptyFinding(
+        p.basename,
+        p.relPath,
+        String(p.frontmatter.status ?? ""),
+        await repo.read(p.relPath)
+      )
+    )
+  )).filter((f) => f != null);
+  if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
   if (baselineList.length) {
     const baseline = new Set(baselineList);
     findings = findings.filter((f) => !baseline.has(baselineKey(f)));
@@ -11568,7 +11611,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.17.0";
+var PLUGIN_VERSION = "0.18.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

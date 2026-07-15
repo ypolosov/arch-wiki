@@ -13,6 +13,7 @@ import {
 } from '../../domain/services/LintRuleSet';
 import { glossaryFindings, parseTermSheet } from '../../domain/services/Glossary';
 import { qaMeasureFinding } from '../../domain/services/QualityAttribute';
+import { adrOptionsEmptyFinding } from '../../domain/services/DecisionRecord';
 import { kindOfPage } from '../../domain/model/WikiPage';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
@@ -67,6 +68,22 @@ export async function lintWiki(
     await Promise.all(qaPages.map(async (p) => qaMeasureFinding(p.basename, p.relPath, await repo.read(p.relPath))))
   ).filter((f): f is NonNullable<typeof f> => f != null);
   if (qaFindings.length) findings = sortFindings([...findings, ...qaFindings]);
+
+  // ADR candidate-set adequacy (FPF C.32.ADA): an accepted ADR's options section must not be empty.
+  const adrPages = pages.filter((p) => kindOfPage(p) === 'adr');
+  const adrFindings = (
+    await Promise.all(
+      adrPages.map(async (p) =>
+        adrOptionsEmptyFinding(
+          p.basename,
+          p.relPath,
+          String((p.frontmatter as { status?: unknown }).status ?? ''),
+          await repo.read(p.relPath),
+        ),
+      ),
+    )
+  ).filter((f): f is NonNullable<typeof f> => f != null);
+  if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
 
   // Suppress findings recorded as a pre-existing baseline at adoption time.
   if (baselineList.length) {

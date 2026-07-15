@@ -27,10 +27,20 @@ Canonical skeleton: `docs/architecture/adrs/0000-template.md`.
 - `## Pros and Cons of the Options`
 - `## More Information` — related ADRs (wikilinked) and realized C4 elements.
 
+## Decision adequacy (FPF C.32.ADA)
+- An accepted decision needs a real **candidate set** — ≥2 distinct `## Considered Options`. `lint`
+  flags `adr-options-empty` when an accepted ADR's Considered-Options section is present but empty;
+  whether a filled set has *enough, genuinely distinct* alternatives is your judgement at `/arch-wiki:review`.
+- Record **`## Confirmation`** (how/when the decision is confirmed — a review, test, deployment, or
+  metric) and **`## Reopen Triggers`** (what observation would revisit it). These make the decision
+  falsifiable rather than a one-way door.
+
 ## Lifecycle / superseding
 - Never rewrite an accepted ADR. To change a decision, write a **new** ADR and:
   - set the old ADR's `Status` to `superseded` and link the successor,
   - set the new ADR's `More Information` to link the predecessor,
+  - **state the supersession reason** — distinguish *decision replaced* (a better option) from
+    *rationale decayed* (a premise no longer holds, FPF C.32.FAIL); one line is enough,
   - record the transition in an `iterations/ITER-NN.md` entry (cf. ITER-01
     superseding ADR-0023 with ADR-0027).
 
