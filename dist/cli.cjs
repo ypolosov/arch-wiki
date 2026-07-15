@@ -9564,6 +9564,9 @@ var REPO_PATH_ANCHORED_RE = new RegExp(`^${REPO_PATH_SRC}$`);
 function isRepoInternalPath(token) {
   return REPO_PATH_ANCHORED_RE.test(token.trim());
 }
+function findRepoPathLeaks(text) {
+  return [...new Set([...text.matchAll(REPO_PATH_RE)].map((m) => m[0]))].sort();
+}
 var REGISTER_PHRASES = {
   risks: "the risk register",
   "gap-analysis": "the gap analysis",
@@ -10321,6 +10324,23 @@ async function recordPage(input, deps) {
     }
   }
   return { source, page, ledgerAppended, ledgerRemoved: false, frontmatterUpdated };
+}
+
+// src/domain/services/VerifyMirror.ts
+function verifyMirror(pages) {
+  const violations = [];
+  for (const p of pages) {
+    const bodyLeaks = findRepoPathLeaks(p.body ?? "");
+    if (bodyLeaks.length) violations.push({ page: p.source, where: "body", leaks: bodyLeaks });
+    const restoreText = (p.restore ?? []).map((r) => r.original ?? "").join("\n");
+    const restoreLeaks = findRepoPathLeaks(restoreText);
+    if (restoreLeaks.length) violations.push({ page: p.source, where: "restore", leaks: restoreLeaks });
+  }
+  return {
+    ok: violations.length === 0,
+    checked: pages.length,
+    violations: violations.sort((a, b) => a.page.localeCompare(b.page) || a.where.localeCompare(b.where))
+  };
 }
 
 // src/application/usecases/EnrichDriver.ts
@@ -11548,7 +11568,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.16.0";
+var PLUGIN_VERSION = "0.17.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -12320,6 +12340,39 @@ async function main() {
       emit({ ok: true, command: "adequacy", data: report });
     } catch (err) {
       fail("adequacy", err);
+    }
+  });
+  cli.command("verify-mirror", "assert the Confluence mirror leaks no repo-internal path (faithfulness gate, FPF A.6.3.CSC)").option("--plan <file>", "a saved render-confluence plan JSON (else read the plan from stdin)").action(async (opts) => {
+    try {
+      const fs2 = new NodeFileSystem();
+      const cwd = opts.cwd ?? process.cwd();
+      let raw;
+      if (opts.plan) {
+        raw = await readPlanPages(fs2, String(opts.plan), cwd);
+      } else {
+        const stdin = await readStdin();
+        let parsed;
+        try {
+          parsed = JSON.parse(stdin || "{}");
+        } catch (e) {
+          throw new DomainError(`malformed plan JSON on stdin: ${e.message}`, 2);
+        }
+        const env = parsed;
+        const pages = env.data?.pages ?? env.pages;
+        if (!Array.isArray(pages)) throw new DomainError("plan has no data.pages[]", 2);
+        raw = pages;
+      }
+      const result = verifyMirror(
+        raw.map((p) => ({
+          source: String(p.source ?? ""),
+          body: String(p.body ?? ""),
+          restore: Array.isArray(p.restore) ? p.restore : []
+        }))
+      );
+      emit({ ok: result.ok, command: "verify-mirror", data: result });
+      if (!result.ok) process.exit(2);
+    } catch (err) {
+      fail("verify-mirror", err);
     }
   });
   cli.command("sync-templates", "sync plugin templates into target .foam/templates (non-destructive)").option("--check", "report drift only (default; exits 2 on missing/stale)").option("--force", "create missing and update stale templates (curated files preserved)").option("--dry-run", "preview without writing or failing").action(async (opts) => {

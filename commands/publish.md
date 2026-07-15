@@ -19,6 +19,10 @@ Confluence is a **read-only 1:1 mirror** with a visibility filter. (In FPF terms
    `data.spaceId` or `data.cloudId` is missing (createConfluencePage needs the NUMERIC space id, not the KEY
    → HTTP 400). Get the numeric id once with `getConfluenceSpaces(keys:["<KEY>"])` and put it in
    `integrations.confluence.spaceId`.
+   **Faithfulness gate (deterministic, FPF A.6.3.CSC):** `arch-wiki verify-mirror --plan /tmp/aw-mirror.json`
+   (or pipe the plan on stdin) asserts acceptance tier (i) — no repo-internal source path survived into any
+   page `body` OR RU-mask `restore` value. Exit 2 + a typed `violations[]` if a leak escaped the projection;
+   fix before publishing. External/POC git URLs in ADRs are kept by design (tier ii) and never flagged.
 2. `ToolSearch "mcp confluence"`; none → "MCP not configured, see CLAUDE.md#MCP-Setup", stop.
 3. **Human gate:** show the create / update / **DELETE** lists; orphan deletes need explicit confirmation.
 

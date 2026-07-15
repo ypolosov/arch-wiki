@@ -368,6 +368,16 @@ export function isRepoInternalPath(token: string): boolean {
   return REPO_PATH_ANCHORED_RE.test(token.trim());
 }
 
+/**
+ * Every repo-internal source path that LEAKED into already-projected mirror text (the
+ * curated-mirror faithfulness gate, acceptance tier i — FPF A.6.3.CSC ControlledSemanticCoarsening:
+ * the git source-of-truth must not survive the projection). External/POC git URLs
+ * (bitbucket.org/…, git.shakuro.com) are decision-evidence and are NOT matched (tier ii). Pure.
+ */
+export function findRepoPathLeaks(text: string): string[] {
+  return [...new Set([...text.matchAll(REPO_PATH_RE)].map((m) => m[0]))].sort();
+}
+
 const REGISTER_PHRASES: Readonly<Record<string, string>> = {
   risks: 'the risk register',
   'gap-analysis': 'the gap analysis',

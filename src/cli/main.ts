@@ -25,6 +25,7 @@ import { pruneStorySnapshots } from '../application/usecases/PruneStorySnapshots
 import { renderConfluencePayload } from '../application/usecases/RenderConfluencePayload';
 import { recordPage } from '../application/usecases/RecordPage';
 import { applyRestore, ProtectedSpan } from '../domain/services/ConfluenceTree';
+import { verifyMirror } from '../domain/services/VerifyMirror';
 import { enrichDriver } from '../application/usecases/EnrichDriver';
 import { BooksRagPlanner } from '../adapters/rag/BooksRagPlanner';
 import { BooksAnswer, BooksQueryInput } from '../application/ports/BooksRagPort';
@@ -1082,6 +1083,43 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'adequacy', data: report });
       } catch (err) {
         fail('adequacy', err);
+      }
+    });
+
+  cli
+    .command('verify-mirror', 'assert the Confluence mirror leaks no repo-internal path (faithfulness gate, FPF A.6.3.CSC)')
+    .option('--plan <file>', 'a saved render-confluence plan JSON (else read the plan from stdin)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const fs = new NodeFileSystem();
+        const cwd = opts.cwd ?? process.cwd();
+        let raw: Array<Record<string, unknown>>;
+        if (opts.plan) {
+          raw = await readPlanPages(fs, String(opts.plan), cwd);
+        } else {
+          const stdin = await readStdin();
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(stdin || '{}');
+          } catch (e) {
+            throw new DomainError(`malformed plan JSON on stdin: ${(e as Error).message}`, 2);
+          }
+          const env = parsed as { data?: { pages?: unknown }; pages?: unknown };
+          const pages = (env.data?.pages ?? env.pages) as unknown;
+          if (!Array.isArray(pages)) throw new DomainError('plan has no data.pages[]', 2);
+          raw = pages as Array<Record<string, unknown>>;
+        }
+        const result = verifyMirror(
+          raw.map((p) => ({
+            source: String(p.source ?? ''),
+            body: String(p.body ?? ''),
+            restore: Array.isArray(p.restore) ? (p.restore as Array<{ original?: string }>) : [],
+          })),
+        );
+        emit({ ok: result.ok, command: 'verify-mirror', data: result });
+        if (!result.ok) process.exit(2);
+      } catch (err) {
+        fail('verify-mirror', err);
       }
     });
 
