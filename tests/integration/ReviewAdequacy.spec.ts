@@ -55,4 +55,26 @@ describe('reviewAdequacy (integration)', () => {
     expect(adrs.artifacts.every((a) => a.kind === 'adr')).toBe(true);
     expect(adrs.artifacts.some((a) => a.kind === 'use-case')).toBe(false);
   });
+
+  it('purpose: gaps trims the list to non-adequate artifacts; summary stays full (FPF E.22)', async () => {
+    const root = await tmpRoot();
+    const sys = new NodeFileSystem();
+    await sys.writeFile(
+      path.join(root, 'drivers/use-cases/UC-001-x.md'),
+      '---\ntype: use-case\nsource: raw/x.md\n---\n# UC-001\n',
+    );
+    await sys.writeFile(
+      path.join(root, 'adrs/0001-a.md'),
+      '---\ntype: adr\nstatus: accepted\n---\n# ADR-0001\nDrivers: [[UC-001-x]]\n\n## Considered Options\n\n## Decision Outcome\n\n## Consequences\n',
+    );
+    await sys.writeFile(path.join(root, 'raw/x.md'), '# x\n');
+    await sys.writeFile(path.join(root, 'drivers/use-cases/UC-002-y.md'), '---\ntype: use-case\n---\n# UC-002\n'); // L0
+    const d = deps(root);
+
+    const gaps = await reviewAdequacy({ purpose: 'gaps' }, d);
+    expect(gaps.summary.total).toBeGreaterThanOrEqual(3); // full picture in the summary
+    expect(gaps.artifacts.every((a) => a.band !== 'adequate')).toBe(true); // list trimmed
+    expect(gaps.artifacts.some((a) => a.id === 'UC-002-y')).toBe(true);
+    expect(gaps.artifacts.some((a) => a.id === 'UC-001-x')).toBe(false); // adequate → trimmed
+  });
 });

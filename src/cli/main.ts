@@ -1064,6 +1064,7 @@ async function main(): Promise<void> {
     .command('adequacy', 'score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)')
     .option('--kind <kind>', 'restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)')
     .option('--id <id>', 'restrict to one artifact by id/basename')
+    .option('--purpose <mode>', 'declared evaluation purpose (FPF E.22): floor (all, default) | gaps (only non-adequate)')
     .action(async (opts: GlobalOpts & Record<string, unknown>) => {
       try {
         await assertWikiRootExists(opts);
@@ -1074,6 +1075,7 @@ async function main(): Promise<void> {
           {
             kind: opts.kind ? (String(opts.kind) as ArtifactKind) : undefined,
             id: opts.id ? String(opts.id) : undefined,
+            purpose: opts.purpose === 'gaps' ? 'gaps' : 'floor',
           },
           { repo, ledger: new FileLedgerStore(root, fs) },
         );

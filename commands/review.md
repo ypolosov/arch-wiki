@@ -7,7 +7,8 @@ allowed-tools: Bash(arch-wiki:*), Task
 Run the **Review** operation (FPF adequacy, C.32.ADA / C.30.AD). The structural floor is deterministic
 and Core-owned; you add the judgement it cannot.
 
-1. `arch-wiki adequacy --json` (pass through `--kind`/`--id`). Each artifact gets a `band`
+1. `arch-wiki adequacy --json` (pass through `--kind`/`--id`; `--purpose gaps` lists only non-adequate
+   artifacts while the `summary` keeps the full picture — FPF E.22). Each artifact gets a `band`
    (`adequate` | `thin` | `inadequate`) computed from checkable `bases` (FACTS, not judgement) plus a
    `summary`. The band is a **capped structural floor, not a quality score**: `inadequate` = a *critical*
    base fails (an ADR with no Decision Outcome / no options / invalid status; a driver at AssuranceLevel L0);

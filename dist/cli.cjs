@@ -11337,7 +11337,9 @@ async function reviewAdequacy(opts, deps) {
       (a) => a.id.toLowerCase() === want || a.id.toLowerCase().startsWith(`${want}-`)
     );
   }
-  return { artifacts, summary: summarizeAdequacy(artifacts) };
+  const summary = summarizeAdequacy(artifacts);
+  if (opts.purpose === "gaps") artifacts = artifacts.filter((a) => a.band !== "adequate");
+  return { artifacts, summary };
 }
 
 // src/application/usecases/SyncTemplates.ts
@@ -11500,7 +11502,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.13.0";
+var PLUGIN_VERSION = "0.14.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -12255,7 +12257,7 @@ async function main() {
       fail("waive-debt", err);
     }
   });
-  cli.command("adequacy", "score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)").option("--kind <kind>", "restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)").option("--id <id>", "restrict to one artifact by id/basename").action(async (opts) => {
+  cli.command("adequacy", "score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)").option("--kind <kind>", "restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)").option("--id <id>", "restrict to one artifact by id/basename").option("--purpose <mode>", "declared evaluation purpose (FPF E.22): floor (all, default) | gaps (only non-adequate)").action(async (opts) => {
     try {
       await assertWikiRootExists(opts);
       const fs2 = new NodeFileSystem();
@@ -12264,7 +12266,8 @@ async function main() {
       const report = await reviewAdequacy(
         {
           kind: opts.kind ? String(opts.kind) : void 0,
-          id: opts.id ? String(opts.id) : void 0
+          id: opts.id ? String(opts.id) : void 0,
+          purpose: opts.purpose === "gaps" ? "gaps" : "floor"
         },
         { repo, ledger: new FileLedgerStore(root, fs2) }
       );

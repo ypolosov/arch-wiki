@@ -21,6 +21,12 @@ export interface ReviewAdequacyOptions {
   kind?: ArtifactKind;
   /** Restrict to one artifact by id/basename (exact or `<id>-…` prefix). */
   id?: string;
+  /**
+   * Declared evaluation purpose (FPF E.22 — scale ceremony to reliance). `floor`
+   * (default) lists every artifact; `gaps` trims the list to non-adequate ones. The
+   * `summary` always reflects the full picture regardless of purpose.
+   */
+  purpose?: 'floor' | 'gaps';
 }
 
 export interface ReviewAdequacyReport {
@@ -60,5 +66,8 @@ export async function reviewAdequacy(
       (a) => a.id.toLowerCase() === want || a.id.toLowerCase().startsWith(`${want}-`),
     );
   }
-  return { artifacts, summary: summarizeAdequacy(artifacts) };
+  // Summary always reflects the full (kind/id-scoped) picture; `purpose: gaps` only trims the list.
+  const summary = summarizeAdequacy(artifacts);
+  if (opts.purpose === 'gaps') artifacts = artifacts.filter((a) => a.band !== 'adequate');
+  return { artifacts, summary };
 }
