@@ -67,6 +67,13 @@ the repo-structure table in `index.md` is the typical case.)
 chain** (parent-first), so you can publish one branch and still create parents before children — the mirror
 keeps its hierarchy instead of flattening. `--all` is the default full mirror.
 
+**Mirror hierarchy (v0.20).** The root `index.md` parents the **arc42 §1–§12 hubs ONLY** (the top-level
+TOC). A numbered artifact nests under its arc42 hub; a concept / entity / derived register nests under a
+default arc42 section (concept → §4, entity → §5, `glossary` → §12, `utility-tree` → §10) — override
+per-page with `arc42_parent: <NN>` frontmatter. Re-parenting changes a page's `contentHash` (its position
+is part of the published state), so a moved page re-publishes (relocates) on the next `publish` while its
+body stays byte-identical.
+
 **Reverse trace edge (v0.8).** Core appends a `**Realized by:** [KEY](…/browse/KEY)` line to a page's `body`
 when the artifact has `realized_by` Jira issues — the mirror page links back to its issue (forward link is in
 the issue body). It is part of `body`, so it translates/protects like the rest in RU and re-publishes when the

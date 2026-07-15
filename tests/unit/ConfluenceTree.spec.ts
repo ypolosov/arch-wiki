@@ -79,6 +79,36 @@ describe('ConfluenceTree.parentSourceOf', () => {
       parentSourceOf(page('drivers/quality-attributes/QA-001-x.md'), hubMap, included, 'index.md'),
     ).toBe('index.md');
   });
+
+  it('nests concepts/entities/registers under a default arc42 section (root TOC = arc42 only)', () => {
+    const included = new Set([
+      'index.md',
+      'arc42/04-solution-strategy.md',
+      'arc42/05-building-block-view.md',
+      'arc42/10-quality-requirements.md',
+      'arc42/12-glossary.md',
+      'concepts/sweepstakes-legal-model.md',
+      'entities/thing.md',
+      'glossary.md',
+      'utility-tree.md',
+    ]);
+    const arc42Hubs = new Map([
+      ['04', 'arc42/04-solution-strategy.md'],
+      ['05', 'arc42/05-building-block-view.md'],
+      ['10', 'arc42/10-quality-requirements.md'],
+      ['12', 'arc42/12-glossary.md'],
+    ]);
+    const P = (rel: string, fm?: Record<string, unknown>) =>
+      parentSourceOf(page(rel, { fm }), hubMap, included, 'index.md', arc42Hubs);
+    expect(P('concepts/sweepstakes-legal-model.md')).toBe('arc42/04-solution-strategy.md');
+    expect(P('entities/thing.md')).toBe('arc42/05-building-block-view.md');
+    expect(P('glossary.md')).toBe('arc42/12-glossary.md');
+    expect(P('utility-tree.md')).toBe('arc42/10-quality-requirements.md');
+    expect(P('arc42/04-solution-strategy.md')).toBe('index.md'); // a hub stays at the root
+    expect(P('concepts/sweepstakes-legal-model.md', { arc42_parent: '10' })).toBe(
+      'arc42/10-quality-requirements.md',
+    ); // frontmatter override wins
+  });
 });
 
 describe('ConfluenceTree.sortParentFirst', () => {

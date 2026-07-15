@@ -172,9 +172,19 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
   const indexPage = included.find((p) => p.basename === 'index') ?? null;
   const indexSource = indexPage?.relPath ?? null;
 
+  // Section number (`04`) → included arc42 hub relPath, so non-numbered pages (concepts,
+  // entities, glossary, utility-tree) nest under an arc42 section instead of cluttering the
+  // root TOC (the root parents arc42 §1–§12 only).
+  const arc42Hubs = new Map<string, string>();
+  for (const p of included) {
+    if (p.folder !== 'arc42') continue;
+    const m = p.basename.match(/^(\d{2})-/);
+    if (m) arc42Hubs.set(m[1]!, p.relPath);
+  }
+
   const parents = new Map<string, string | null>();
   for (const p of included) {
-    parents.set(p.relPath, parentSourceOf(p, hubMap, includedSources, indexSource));
+    parents.set(p.relPath, parentSourceOf(p, hubMap, includedSources, indexSource, arc42Hubs));
   }
 
   const ledgerRows = await deps.ledger.readPages();

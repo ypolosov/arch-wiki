@@ -9408,12 +9408,42 @@ function isPageExcluded(page, exclude) {
   }
   return false;
 }
-function parentSourceOf(page, hubMap, includedSources, indexSource) {
+function defaultSection(page) {
+  switch (page.basename) {
+    case "glossary":
+      return "12";
+    case "utility-tree":
+      return "10";
+    case "gap-analysis":
+      return "11";
+    default:
+      break;
+  }
+  const kind = kindOfPage(page);
+  if (kind === "concept") return "04";
+  if (kind === "entity") return "05";
+  return null;
+}
+function parentSourceOf(page, hubMap, includedSources, indexSource, arc42Hubs = /* @__PURE__ */ new Map()) {
   if (page.relPath === indexSource) return null;
   const kind = kindOfPage(page);
-  if (kind && kind !== "arc42") {
-    const hub = hubMap.get(kind) ?? null;
-    if (hub && hub !== page.relPath && includedSources.has(hub)) return hub;
+  const useHub = (hub) => hub && hub !== page.relPath && includedSources.has(hub) ? hub : null;
+  const override = page.frontmatter.arc42_parent;
+  if (override != null && override !== "") {
+    const sec = String(override).replace(/-.*$/, "").padStart(2, "0");
+    const hub = useHub(arc42Hubs.get(sec));
+    if (hub) return hub;
+  }
+  if (kind !== "arc42") {
+    if (kind) {
+      const hub = useHub(hubMap.get(kind));
+      if (hub) return hub;
+    }
+    const sec = defaultSection(page);
+    if (sec) {
+      const hub = useHub(arc42Hubs.get(sec));
+      if (hub) return hub;
+    }
   }
   return indexSource && indexSource !== page.relPath ? indexSource : null;
 }
@@ -10163,9 +10193,15 @@ async function renderConfluencePayload(deps) {
   }
   const indexPage = included.find((p) => p.basename === "index") ?? null;
   const indexSource = indexPage?.relPath ?? null;
+  const arc42Hubs = /* @__PURE__ */ new Map();
+  for (const p of included) {
+    if (p.folder !== "arc42") continue;
+    const m = p.basename.match(/^(\d{2})-/);
+    if (m) arc42Hubs.set(m[1], p.relPath);
+  }
   const parents = /* @__PURE__ */ new Map();
   for (const p of included) {
-    parents.set(p.relPath, parentSourceOf(p, hubMap, includedSources, indexSource));
+    parents.set(p.relPath, parentSourceOf(p, hubMap, includedSources, indexSource, arc42Hubs));
   }
   const ledgerRows = await deps.ledger.readPages();
   const publishedMap = /* @__PURE__ */ new Map();
@@ -11624,7 +11660,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.19.0";
+var PLUGIN_VERSION = "0.20.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

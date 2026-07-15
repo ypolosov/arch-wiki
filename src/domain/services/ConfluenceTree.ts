@@ -56,23 +56,75 @@ export function isPageExcluded(page: WikiPage, exclude: MirrorExclude): boolean 
 }
 
 /**
+ * Default arc42 section (`NN`) a NON-numbered page nests under, so the root index
+ * (the top-level TOC) parents ONLY the arc42 hubs. A synthesis `concept` sits under
+ * §4 Solution Strategy, an `entity` under §5 Building Block View, and the derived
+ * registers under their arc42 section. A page overrides this with `arc42_parent:` frontmatter.
+ */
+function defaultSection(page: WikiPage): string | null {
+  switch (page.basename) {
+    case 'glossary':
+      return '12';
+    case 'utility-tree':
+      return '10';
+    case 'gap-analysis':
+      return '11';
+    default:
+      break;
+  }
+  const kind = kindOfPage(page);
+  if (kind === 'concept') return '04';
+  if (kind === 'entity') return '05';
+  return null;
+}
+
+/**
  * Parent page (by source relPath) for the Confluence tree:
  * - the wiki `index.md` is the root (null parent);
- * - a numbered artifact nests under its arc42 hub (if that hub is itself included);
- * - everything else (arc42 hubs, entities/concepts, …) nests under the root index.
+ * - an arc42 hub nests under the root — the root TOC is arc42 §1–§12 ONLY;
+ * - a numbered artifact nests under its arc42 hub (if that hub is included);
+ * - a concept / entity / derived register nests under its default arc42 section
+ *   (`defaultSection`), overridable per-page with `arc42_parent: <NN>` frontmatter;
+ * - anything unresolved falls back to the root index.
+ * `arc42Hubs` maps a section number (`04`) → the included hub relPath; omit it for the
+ * legacy behaviour (non-numbered pages fall straight to root).
  */
 export function parentSourceOf(
   page: WikiPage,
   hubMap: ReadonlyMap<ArtifactKind, string | null>,
   includedSources: ReadonlySet<string>,
   indexSource: string | null,
+  arc42Hubs: ReadonlyMap<string, string> = new Map(),
 ): string | null {
   if (page.relPath === indexSource) return null;
   const kind = kindOfPage(page);
-  if (kind && kind !== 'arc42') {
-    const hub = hubMap.get(kind) ?? null;
-    if (hub && hub !== page.relPath && includedSources.has(hub)) return hub;
+  const useHub = (hub: string | null | undefined): string | null =>
+    hub && hub !== page.relPath && includedSources.has(hub) ? hub : null;
+
+  // 1. Explicit override: `arc42_parent: 05` / `05-building-block-view`.
+  const override = (page.frontmatter as { arc42_parent?: unknown }).arc42_parent;
+  if (override != null && override !== '') {
+    const sec = String(override).replace(/-.*$/, '').padStart(2, '0');
+    const hub = useHub(arc42Hubs.get(sec));
+    if (hub) return hub;
   }
+
+  // 2. Arc42 hubs sit at the top level (under the root).
+  if (kind !== 'arc42') {
+    // 3. Numbered artifact → its kind's arc42 hub.
+    if (kind) {
+      const hub = useHub(hubMap.get(kind));
+      if (hub) return hub;
+    }
+    // 4. Concept / entity / register → its default arc42 section.
+    const sec = defaultSection(page);
+    if (sec) {
+      const hub = useHub(arc42Hubs.get(sec));
+      if (hub) return hub;
+    }
+  }
+
+  // 5. Fallback: the root index.
   return indexSource && indexSource !== page.relPath ? indexSource : null;
 }
 
