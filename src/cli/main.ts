@@ -38,6 +38,7 @@ import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
 import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
 import { reportDriverAssurance } from '../application/usecases/DriverAssurance';
 import { updateEpistemicDebt } from '../application/usecases/UpdateEpistemicDebt';
+import { reviewAdequacy } from '../application/usecases/ReviewAdequacy';
 import { syncTemplates } from '../application/usecases/SyncTemplates';
 import { applyMigration } from '../application/usecases/Migrate';
 import { CURRENT_SCHEMA_VERSION } from '../migrations/registry';
@@ -1025,6 +1026,29 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'update-epistemic-debt', data: result });
       } catch (err) {
         fail('update-epistemic-debt', err);
+      }
+    });
+
+  cli
+    .command('adequacy', 'score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)')
+    .option('--kind <kind>', 'restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)')
+    .option('--id <id>', 'restrict to one artifact by id/basename')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        await assertWikiRootExists(opts);
+        const fs = new NodeFileSystem();
+        const root = wikiRoot(opts);
+        const repo = new FoamWikiRepository(root, fs);
+        const report = await reviewAdequacy(
+          {
+            kind: opts.kind ? (String(opts.kind) as ArtifactKind) : undefined,
+            id: opts.id ? String(opts.id) : undefined,
+          },
+          { repo, ledger: new FileLedgerStore(root, fs) },
+        );
+        emit({ ok: true, command: 'adequacy', data: report });
+      } catch (err) {
+        fail('adequacy', err);
       }
     });
 

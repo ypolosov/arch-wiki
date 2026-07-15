@@ -185,6 +185,16 @@ Graded, deterministic maturity per driver (FPF B.3.3) + a decay register (FPF B.
   citations, paper coverage, stale issues, missing sources. Notes outside the markers survive;
   never hand-edit inside them. It is an **internal register — excluded from the Confluence mirror**.
 
+### `/arch-wiki:review` (adequacy)
+Per-kind structural adequacy of design artifacts (FPF C.32.ADA decision-adequacy, C.30.AD):
+- `arch-wiki adequacy [--kind <k>] [--id <ID>]` gives each artifact a `band` (`adequate` / `thin` /
+  `inadequate`) from checkable `bases` — a **capped structural floor, not a quality score**. `inadequate`
+  = a *critical* base fails (ADR with no Decision Outcome / no options / invalid status; a driver at
+  AssuranceLevel L0); `thin` = only non-critical bases fail. Bases compose the wave's evidence signals
+  (a driver's `covered` base reads its AssuranceLevel; `no-debt` reads `epistemic-debt`).
+- The `/arch-wiki:review` command adds the **judgement** the Core cannot (are the options distinct, the
+  measure testable, the consequences balanced) via the `adequacy-rubric` skill — read-only, proposes fixes.
+
 ## C4 / LikeC4 rules
 
 > **Project-specific — adapt to your model.** The element kinds, views, and

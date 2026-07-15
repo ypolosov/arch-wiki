@@ -11023,6 +11023,108 @@ async function updateEpistemicDebt(deps) {
   return { path: FILE3, created: !exists, debtCount: rows.length, byKind };
 }
 
+// src/domain/services/Adequacy.ts
+var VALID_ADR_STATUS = /* @__PURE__ */ new Set(["proposed", "accepted", "deprecated", "superseded", "rejected"]);
+var SCORED_KINDS = [
+  "adr",
+  "use-case",
+  "quality-attribute",
+  "constraint",
+  "concern",
+  "iteration",
+  "concept",
+  "entity"
+];
+function bandOf(bases) {
+  if (bases.some((b) => b.critical && !b.ok)) return "inadequate";
+  if (bases.some((b) => !b.ok)) return "thin";
+  return "adequate";
+}
+function hasSection(sectionSet, marker) {
+  return sectionSet.has(normalizeSection(marker));
+}
+function hasAnySection(sectionSet, markers) {
+  return markers.some((m) => sectionSet.has(normalizeSection(m)));
+}
+function computeAdequacy(g, ctx = {}) {
+  const assurance = ctx.assurance ?? /* @__PURE__ */ new Map();
+  const debt = ctx.debtSubjects ?? /* @__PURE__ */ new Set();
+  const inbound = inboundCounts(g);
+  const driverSet = new Set(pagesOfKind(g, DRIVER_KINDS).map((p) => p.basename));
+  const adrSet = new Set(pagesOfKind(g, ["adr"]).map((p) => p.basename));
+  const out = [];
+  for (const p of pagesOfKind(g, SCORED_KINDS)) {
+    const kind = kindOfPage(p);
+    const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
+    const linksDrivers = p.links.filter((l) => driverSet.has(l.target)).length;
+    const linksAdrs = p.links.filter((l) => adrSet.has(l.target)).length;
+    const sourced = hasSection(sections, "Sources") || typeof p.frontmatter.source === "string";
+    const noDebt = !debt.has(p.basename);
+    const bases = [];
+    if (kind === "adr") {
+      const status = String(p.frontmatter.status ?? "").toLowerCase();
+      const statusOk = VALID_ADR_STATUS.has(status) || hasSection(sections, "Status");
+      bases.push({ name: "drivers-linked", ok: linksDrivers > 0, critical: true, detail: `${linksDrivers} driver link(s)` });
+      bases.push({ name: "options", ok: hasAnySection(sections, ["Considered Options", "Options"]), critical: true });
+      bases.push({ name: "decision", ok: hasAnySection(sections, ["Decision Outcome", "Decision"]), critical: true });
+      bases.push({ name: "consequences", ok: hasSection(sections, "Consequences"), critical: false });
+      bases.push({ name: "status", ok: statusOk, critical: true, detail: status || "(section)" });
+      if (status === "superseded" || status === "deprecated") {
+        const hasSuccessor = p.links.some((l) => adrSet.has(l.target) && l.target !== p.basename);
+        bases.push({ name: "successor-linked", ok: hasSuccessor, critical: true, detail: `${status} \u2192 successor` });
+      }
+    } else if (DRIVER_KINDS.includes(kind)) {
+      const level = assurance.get(p.basename)?.level;
+      bases.push({ name: "covered", ok: level === "L1" || level === "L2", critical: true, detail: `assurance ${level ?? "L0"}` });
+      bases.push({ name: "sourced", ok: sourced, critical: false });
+      bases.push({ name: "no-debt", ok: noDebt, critical: false });
+    } else if (kind === "iteration") {
+      bases.push({ name: "drivers-linked", ok: linksDrivers > 0, critical: false, detail: `${linksDrivers} driver link(s)` });
+      bases.push({ name: "decisions-linked", ok: linksAdrs > 0, critical: false, detail: `${linksAdrs} ADR link(s)` });
+    } else {
+      bases.push({ name: "linked", ok: (inbound.get(p.basename) ?? 0) > 0, critical: false });
+      if (kind === "concept") bases.push({ name: "sourced", ok: sourced, critical: false });
+    }
+    out.push({ id: p.basename, file: p.relPath, kind, band: bandOf(bases), bases });
+  }
+  return out.sort((a, b) => a.file.localeCompare(b.file));
+}
+function summarizeAdequacy(rows) {
+  const s = { adequate: 0, thin: 0, inadequate: 0, total: rows.length, byKind: {} };
+  for (const r of rows) {
+    s[r.band]++;
+    const k = s.byKind[r.kind] ??= { adequate: 0, thin: 0, inadequate: 0 };
+    k[r.band]++;
+  }
+  return s;
+}
+
+// src/application/usecases/ReviewAdequacy.ts
+async function reviewAdequacy(opts, deps) {
+  const [pages, files, issues] = await Promise.all([
+    deps.repo.loadPages(),
+    deps.repo.listFiles(),
+    deps.ledger.readIssues()
+  ]);
+  const g = buildGraph(pages);
+  const ledgerIssueKeys = new Set(issues.map((r) => r.key));
+  const assurance = new Map(
+    computeAssurance(g, { ledgerIssueKeys }).map((a) => [a.driver, a])
+  );
+  const debtSubjects = new Set(
+    gatherEpistemicDebt(g, { ledgerIssueKeys, fileSet: new Set(files) }).map((d) => d.subject)
+  );
+  let artifacts = computeAdequacy(g, { assurance, debtSubjects });
+  if (opts.kind) artifacts = artifacts.filter((a) => a.kind === opts.kind);
+  if (opts.id) {
+    const want = opts.id.toLowerCase();
+    artifacts = artifacts.filter(
+      (a) => a.id.toLowerCase() === want || a.id.toLowerCase().startsWith(`${want}-`)
+    );
+  }
+  return { artifacts, summary: summarizeAdequacy(artifacts) };
+}
+
 // src/application/usecases/SyncTemplates.ts
 var FOAM_DIR = ".foam/templates";
 var MARKER_RE = /<!-- arch-wiki:template sha256=([0-9a-f]+) -->/;
@@ -11183,7 +11285,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.9.0";
+var PLUGIN_VERSION = "0.10.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -11913,6 +12015,24 @@ async function main() {
       emit({ ok: true, command: "update-epistemic-debt", data: result });
     } catch (err) {
       fail("update-epistemic-debt", err);
+    }
+  });
+  cli.command("adequacy", "score per-kind structural adequacy of design artifacts (FPF C.32.ADA, deterministic)").option("--kind <kind>", "restrict to one kind (adr|use-case|quality-attribute|constraint|concern|iteration|concept|entity)").option("--id <id>", "restrict to one artifact by id/basename").action(async (opts) => {
+    try {
+      await assertWikiRootExists(opts);
+      const fs2 = new NodeFileSystem();
+      const root = wikiRoot(opts);
+      const repo = new FoamWikiRepository(root, fs2);
+      const report = await reviewAdequacy(
+        {
+          kind: opts.kind ? String(opts.kind) : void 0,
+          id: opts.id ? String(opts.id) : void 0
+        },
+        { repo, ledger: new FileLedgerStore(root, fs2) }
+      );
+      emit({ ok: true, command: "adequacy", data: report });
+    } catch (err) {
+      fail("adequacy", err);
     }
   });
   cli.command("sync-templates", "sync plugin templates into target .foam/templates (non-destructive)").option("--check", "report drift only (default; exits 2 on missing/stale)").option("--force", "create missing and update stale templates (curated files preserved)").option("--dry-run", "preview without writing or failing").action(async (opts) => {

@@ -95,6 +95,7 @@ stay as-is.
 | `/arch-wiki:query <question>` | Answer from the synthesized wiki (not raw); optionally persist the answer as a `concepts/` page. |
 | `/arch-wiki:lint` | Audit graph integrity (orphans, broken links, uncovered drivers, superseded ADRs, terminology drift). |
 | `/arch-wiki:assurance` | Report graded AssuranceLevel (L0/L1/L2) per driver and regenerate the `epistemic-debt.md` decay register (FPF B.3.3/B.3.4). |
+| `/arch-wiki:review` | Score per-kind structural adequacy (adequate/thin/inadequate) of ADRs, drivers, iterations and add the FPF judgement rubric (FPF C.32.ADA/C.30.AD). |
 | `/arch-wiki:adr <title>` | Scaffold the next-numbered MADR ADR with drivers wired as wikilinks. |
 | `/arch-wiki:driver <uc\|qa\|con\|conc> <title>` | Scaffold a new ADD driver from the right template. |
 | `/arch-wiki:iteration <title>` | Scaffold a new ADD iteration log. |
