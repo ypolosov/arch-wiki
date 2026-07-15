@@ -10662,6 +10662,19 @@ function runLint(g, ctx = {}) {
       });
     }
   }
+  for (const p of pagesOfKind(g, ["arc42"])) {
+    const tags = p.frontmatter.tags;
+    const isC4Hub = Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === "c4");
+    if (!isC4Hub) continue;
+    if (!p.headings.some((h) => /\bc4\b/i.test(h))) {
+      findings.push({
+        rule: "view-hub-uncorresponded",
+        severity: "low",
+        file: p.relPath,
+        message: `arc42 hub ${p.basename} is C4-tagged but shows no C4 view (no "C4 \u2026" section, FPF E.17.0)`
+      });
+    }
+  }
   return sortFindings(findings);
 }
 var MARKER_INDEPENDENT_RULES = /* @__PURE__ */ new Set(["missing-required-section", "required-section-underlinked"]);
@@ -11248,7 +11261,8 @@ var SCORED_KINDS = [
   "concern",
   "iteration",
   "concept",
-  "entity"
+  "entity",
+  "arc42"
 ];
 function bandOf(bases) {
   if (bases.some((b) => b.critical && !b.ok)) return "inadequate";
@@ -11296,6 +11310,12 @@ function computeAdequacy(g, ctx = {}) {
     } else if (kind === "iteration") {
       bases.push({ name: "drivers-linked", ok: linksDrivers > 0, critical: false, detail: `${linksDrivers} driver link(s)` });
       bases.push({ name: "decisions-linked", ok: linksAdrs > 0, critical: false, detail: `${linksAdrs} ADR link(s)` });
+    } else if (kind === "arc42") {
+      const tags = p.frontmatter.tags;
+      const isC4Hub = Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === "c4");
+      if (isC4Hub) {
+        bases.push({ name: "corresponds", ok: p.headings.some((h) => /\bc4\b/i.test(h)), critical: false, detail: "C4 view shown" });
+      }
     } else {
       bases.push({ name: "linked", ok: (inbound.get(p.basename) ?? 0) > 0, critical: false });
       if (kind === "concept") bases.push({ name: "sourced", ok: sourced, critical: false });
@@ -11502,7 +11522,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.14.0";
+var PLUGIN_VERSION = "0.15.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

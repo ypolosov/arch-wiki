@@ -210,6 +210,24 @@ describe('hypothesis abductive discipline', () => {
   });
 });
 
+describe('view-hub correspondence', () => {
+  it('flags a C4-tagged arc42 hub that shows no C4 view', () => {
+    const g = buildGraph([
+      page('arc42/05-building-block-view.md', { frontmatter: { tags: ['arc42', 'c4'] }, headings: ['Building Block View'] }),
+    ]);
+    expect(runLint(g).some((f) => f.rule === 'view-hub-uncorresponded')).toBe(true);
+  });
+
+  it('passes a C4-tagged hub with a C4 section, and ignores non-C4 hubs', () => {
+    const withView = buildGraph([
+      page('arc42/05-x.md', { frontmatter: { tags: ['arc42', 'c4'] }, headings: ['Building Block View', 'C4 source'] }),
+    ]);
+    expect(runLint(withView).some((f) => f.rule === 'view-hub-uncorresponded')).toBe(false);
+    const nonC4 = buildGraph([page('arc42/01-goals.md', { frontmatter: { tags: ['arc42'] }, headings: ['Goals'] })]);
+    expect(runLint(nonC4).some((f) => f.rule === 'view-hub-uncorresponded')).toBe(false);
+  });
+});
+
 describe('baselineKey', () => {
   it('is marker-independent for required-section rules (key on rule|file|kind)', () => {
     const file = 'drivers/quality-attributes/QA-020-x.md';

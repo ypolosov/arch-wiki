@@ -5,7 +5,8 @@ allowed-tools: Bash(arch-wiki:*), Read, ToolSearch
 ---
 
 Publish the Confluence KB mirror (CAP-2). `docs/architecture` is the source of truth;
-Confluence is a **read-only 1:1 mirror** with a visibility filter.
+Confluence is a **read-only 1:1 mirror** with a visibility filter. (In FPF terms the mirror is an
+**MVPK PlainView PublicationUnit** — a faithful presentation view over the English canon, E.17.)
 
 1. `arch-wiki lint --severity high` first — a `duplicate-basename` collapses the mirror; fix before
    publishing. Then **save the plan to a file**: `arch-wiki render-confluence --all > /tmp/aw-mirror.json`.

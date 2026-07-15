@@ -48,6 +48,7 @@ const SCORED_KINDS: ArtifactKind[] = [
   'iteration',
   'concept',
   'entity',
+  'arc42',
 ];
 
 function bandOf(bases: AdequacyBase[]): AdequacyBand {
@@ -106,6 +107,13 @@ export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): Ar
     } else if (kind === 'iteration') {
       bases.push({ name: 'drivers-linked', ok: linksDrivers > 0, critical: false, detail: `${linksDrivers} driver link(s)` });
       bases.push({ name: 'decisions-linked', ok: linksAdrs > 0, critical: false, detail: `${linksAdrs} ADR link(s)` });
+    } else if (kind === 'arc42') {
+      // Structural-view adequacy (FPF C.30.ASV / E.17.0): a C4-tagged view hub must show its view.
+      const tags = (p.frontmatter as { tags?: unknown }).tags;
+      const isC4Hub = Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === 'c4');
+      if (isC4Hub) {
+        bases.push({ name: 'corresponds', ok: p.headings.some((h) => /\bc4\b/i.test(h)), critical: false, detail: 'C4 view shown' });
+      }
     } else {
       // concept / entity
       bases.push({ name: 'linked', ok: (inbound.get(p.basename) ?? 0) > 0, critical: false });

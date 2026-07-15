@@ -252,6 +252,23 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     }
   }
 
+  // 8. Structural-view correspondence (FPF E.17.0 / C.34): an arc42 hub bound to a C4
+  //    viewpoint (tag `c4`) must actually SHOW its view — a `## C4 …` section. The `c4`
+  //    tag is the viewpoint binding; a C4 section is the view↔viewpoint correspondence.
+  for (const p of pagesOfKind(g, ['arc42'])) {
+    const tags = (p.frontmatter as { tags?: unknown }).tags;
+    const isC4Hub = Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === 'c4');
+    if (!isC4Hub) continue;
+    if (!p.headings.some((h) => /\bc4\b/i.test(h))) {
+      findings.push({
+        rule: 'view-hub-uncorresponded',
+        severity: 'low',
+        file: p.relPath,
+        message: `arc42 hub ${p.basename} is C4-tagged but shows no C4 view (no "C4 …" section, FPF E.17.0)`,
+      });
+    }
+  }
+
   return sortFindings(findings);
 }
 

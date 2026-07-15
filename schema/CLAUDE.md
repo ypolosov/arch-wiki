@@ -171,6 +171,9 @@ Audit and report (then propose fixes / append to `risks.md`):
 - C4 element ⟷ wiki entity drift — the **deterministic verdict is
   `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this
   LLM-lint line only adds nuance the rule cannot judge.
+- arc42 view-hub correspondence (`view-hub-uncorresponded`, low, FPF E.17.0/C.34): an arc42 hub
+  tagged `c4` (a **viewpoint binding**) that shows no C4 view — no `## C4 …` section. The `c4` tag is
+  the viewpoint↔view correspondence marker; a bound hub must actually present its view.
 - Terminology drift: terms used across pages but absent from `glossary.md` (LLM judgement).
   Deterministic Core checks over the term sheet: `glossary-near-duplicate` (mint-or-reuse, FPF F.8),
   `glossary-term-unlinked` (a term with no managing-page `[[link]]`, F.17), `deprecated-term-without-successor`

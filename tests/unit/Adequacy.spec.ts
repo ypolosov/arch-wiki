@@ -102,6 +102,13 @@ describe('computeAdequacy', () => {
     expect(computeAdequacy(buildGraph([page('concepts/lonely.md')]))[0]!.band).toBe('thin');
   });
 
+  it('scores a C4-tagged arc42 hub by structural-view correspondence', () => {
+    const withView = buildGraph([page('arc42/05-x.md', { frontmatter: { tags: ['arc42', 'c4'] }, headings: ['C4 source'] })]);
+    expect(computeAdequacy(withView).find((a) => a.kind === 'arc42')!.band).toBe('adequate');
+    const noView = buildGraph([page('arc42/05-x.md', { frontmatter: { tags: ['arc42', 'c4'] }, headings: ['Building blocks'] })]);
+    expect(computeAdequacy(noView).find((a) => a.kind === 'arc42')!.band).toBe('thin');
+  });
+
   it('summarizeAdequacy counts by band and kind', () => {
     const g = buildGraph([page('drivers/use-cases/UC-001-a.md'), page('concepts/lonely.md')]);
     const s = summarizeAdequacy(computeAdequacy(g));

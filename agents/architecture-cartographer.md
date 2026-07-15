@@ -38,6 +38,12 @@ npm run validate
 and report the result. Suggest `npm run build` / `npm run export` if the curator
 wants regenerated diagrams.
 
+## Admission discipline (FPF C.35)
+Every proposed `*.c4` diff carries a one-line **admission note**: *which* view/element it admits
+and *which wiki artifact* (ADR / driver / entity) justifies it. `.c4` is a generated-carrier of the
+wiki's structure — never admit an element the graph doesn't ground. A C4-tagged arc42 hub must show
+its view (E.17.0 correspondence — `arch-wiki lint` flags `view-hub-uncorresponded`).
+
 ## Output
 Report: elements reconciled, cross-links added, any `*.c4` edits made (with a
-diff summary), and `npm run validate` result.
+diff summary + the C.35 admission note per edit), and `npm run validate` result.
