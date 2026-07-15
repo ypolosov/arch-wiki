@@ -35,7 +35,10 @@ output, run `arch-wiki lint --json` yourself.
      design artifacts. For each entry decide whether the page leans on the dead
      decision as *current* rationale (→ propose a `risks.md` row via
      `arch-wiki record-risk`) vs a legitimate provenance/"see also" mention (→ leave).
-   - **Terminology drift**: recurring capitalised domain nouns absent from `glossary.md`.
+   - **Terminology drift**: recurring capitalised domain nouns absent from `glossary.md`. (Core now
+     runs the deterministic term-sheet checks — `glossary-near-duplicate`, `glossary-term-unlinked`,
+     `deprecated-term-without-successor`, `entity-without-glossary-term`; you judge the *drift* the
+     table can't see: a term used across pages that was never minted into the sheet.)
 3. Propose concrete `risks.md` rows for genuine risks/debt.
 
 ## Output

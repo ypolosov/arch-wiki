@@ -8,8 +8,10 @@ import {
   LintFinding,
   Severity,
   SEVERITY_RANK,
+  sortFindings,
   SupersededCitation,
 } from '../../domain/services/LintRuleSet';
+import { glossaryFindings, parseTermSheet } from '../../domain/services/Glossary';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
@@ -49,6 +51,13 @@ export async function lintWiki(
   }
 
   let findings = runLint(graph, { allFiles: new Set(allFilesList), requiredSections });
+
+  // Deterministic glossary term-sheet checks (FPF F.7/F.8/F.13/F.17) over glossary.md content.
+  const glossaryPage = pages.find((p) => p.basename === 'glossary');
+  if (glossaryPage) {
+    const gf = glossaryFindings(parseTermSheet(await repo.read(glossaryPage.relPath)), graph);
+    if (gf.length) findings = sortFindings([...findings, ...gf]);
+  }
 
   // Suppress findings recorded as a pre-existing baseline at adoption time.
   if (baselineList.length) {

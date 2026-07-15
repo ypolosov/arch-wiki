@@ -171,7 +171,12 @@ Audit and report (then propose fixes / append to `risks.md`):
 - C4 element ⟷ wiki entity drift — the **deterministic verdict is
   `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this
   LLM-lint line only adds nuance the rule cannot judge.
-- Terminology drift: terms used across pages but absent from `glossary.md`.
+- Terminology drift: terms used across pages but absent from `glossary.md` (LLM judgement).
+  Deterministic Core checks over the term sheet: `glossary-near-duplicate` (mint-or-reuse, FPF F.8),
+  `glossary-term-unlinked` (a term with no managing-page `[[link]]`, F.17), `deprecated-term-without-successor`
+  (F.13), `entity-without-glossary-term` (coverage). The glossary is a **Unified Term Sheet** (FPF F.17):
+  `| Term | Definition |`, optionally extended with a `Context` column (the bounded-context sense, A.6.9)
+  and a `Status` column (lexical continuity, F.13).
 - Missing referenced pages (e.g. `utility-tree`, `gap-analysis`).
 
 ### `/arch-wiki:assurance` (evidence & assurance)

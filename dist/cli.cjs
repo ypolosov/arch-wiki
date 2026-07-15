@@ -10653,6 +10653,90 @@ function sortFindings(findings) {
   );
 }
 
+// src/domain/services/Glossary.ts
+function splitRow(row) {
+  return row.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+function parseTermSheet(markdown) {
+  const terms = [];
+  let cols = null;
+  for (const line of markdown.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("|")) {
+      cols = null;
+      continue;
+    }
+    const cells = splitRow(t);
+    if (!cols) {
+      const lower = cells.map((c) => c.toLowerCase());
+      if (lower.includes("term") && lower.includes("definition")) cols = lower;
+      continue;
+    }
+    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
+    const get = (name) => {
+      const i = cols.indexOf(name);
+      return i >= 0 ? cells[i] ?? "" : "";
+    };
+    const termRaw = get("term");
+    const term = termRaw.replace(/\*\*/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, "$1").trim();
+    if (!term) continue;
+    const context = cols.includes("context") ? get("context").replace(/\*\*/g, "").trim() || void 0 : void 0;
+    const status = cols.includes("status") ? get("status").replace(/\*\*/g, "").trim().toLowerCase() || void 0 : void 0;
+    const links = [...`${termRaw} ${get("definition")}`.matchAll(/\[\[([^\]|#]+)/g)].map((m) => m[1].trim());
+    terms.push({ term, context, definition: get("definition"), status, links: [...new Set(links)] });
+  }
+  return terms;
+}
+var FILE = "glossary.md";
+function glossaryFindings(terms, g) {
+  const out = [];
+  for (let i = 0; i < terms.length; i++) {
+    for (let j = i + 1; j < terms.length; j++) {
+      const a = terms[i].term;
+      const b = terms[j].term;
+      if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 2) continue;
+      if (a.toLowerCase() !== b.toLowerCase() && levenshtein(a.toLowerCase(), b.toLowerCase()) <= 2) {
+        out.push({
+          rule: "glossary-near-duplicate",
+          severity: "low",
+          file: FILE,
+          message: `terms "${a}" and "${b}" are near-duplicates (Levenshtein \u2264 2) \u2014 mint-or-reuse?`
+        });
+      }
+    }
+  }
+  for (const t of terms) {
+    if (t.links.length === 0) {
+      out.push({
+        rule: "glossary-term-unlinked",
+        severity: "low",
+        file: FILE,
+        message: `term "${t.term}" links no managing page ([[\u2026]])`
+      });
+    }
+    if ((t.status === "deprecated" || t.status === "retired") && t.links.length === 0) {
+      out.push({
+        rule: "deprecated-term-without-successor",
+        severity: "medium",
+        file: FILE,
+        message: `${t.status} term "${t.term}" links no successor`
+      });
+    }
+  }
+  const covered = new Set(terms.flatMap((t) => t.links));
+  for (const p of pagesOfKind(g, ["entity"])) {
+    if (!covered.has(p.basename)) {
+      out.push({
+        rule: "entity-without-glossary-term",
+        severity: "low",
+        file: p.relPath,
+        message: `entity ${p.basename} is not referenced by any glossary term`
+      });
+    }
+  }
+  return out;
+}
+
 // src/application/usecases/LintWiki.ts
 async function lintWiki(repo, opts = {}) {
   const [pages, allFilesList, baselineList] = await Promise.all([
@@ -10669,6 +10753,11 @@ async function lintWiki(repo, opts = {}) {
     }
   }
   let findings = runLint(graph, { allFiles: new Set(allFilesList), requiredSections });
+  const glossaryPage = pages.find((p) => p.basename === "glossary");
+  if (glossaryPage) {
+    const gf = glossaryFindings(parseTermSheet(await repo.read(glossaryPage.relPath)), graph);
+    if (gf.length) findings = sortFindings([...findings, ...gf]);
+  }
   if (baselineList.length) {
     const baseline = new Set(baselineList);
     findings = findings.filter((f) => !baseline.has(baselineKey(f)));
@@ -10879,7 +10968,7 @@ ${TABLE_HEADER}${row}
 }
 
 // src/application/usecases/UpdateUtilityTree.ts
-var FILE = "utility-tree.md";
+var FILE2 = "utility-tree.md";
 var HEADER2 = "| Driver | Scenario | Priority |\n| --- | --- | --- |\n";
 var SPEC2 = {
   headerMark: "| Driver |",
@@ -10893,13 +10982,13 @@ async function updateUtilityTree(input, deps) {
   const { repo } = deps;
   const from = input.from.trim();
   if (!from) throw new DomainError("update-utility-tree: missing --from", 1);
-  const exists = await repo.exists(FILE);
-  const content = exists ? await repo.read(FILE) : null;
+  const exists = await repo.exists(FILE2);
+  const content = exists ? await repo.read(FILE2) : null;
   const keyLine = `[[${from}]]`;
   const row = `| [[${from}]] | ${cell2(input.scenario ?? "") || "\u2014"} | ${cell2(input.priority ?? "") || "\u2014"} |`;
   const r = upsertKeyedRow(content, keyLine, row, SPEC2);
-  if (r.changed) await repo.write(FILE, r.content);
-  return { path: FILE, created: !exists, changed: r.changed };
+  if (r.changed) await repo.write(FILE2, r.content);
+  return { path: FILE2, created: !exists, changed: r.changed };
 }
 
 // src/domain/services/ManagedRegion.ts
@@ -10938,7 +11027,7 @@ function replaceManagedRegion(content, startMark, endMark, body, newFileScaffold
 }
 
 // src/application/usecases/UpdateGapAnalysis.ts
-var FILE2 = "gap-analysis.md";
+var FILE3 = "gap-analysis.md";
 var START2 = "<!-- arch-wiki:gaps:start -->";
 var END2 = "<!-- arch-wiki:gaps:end -->";
 var SCAFFOLD2 = "---\ntype: gap-analysis\ntags: [gap-analysis]\n---\n\n# Gap Analysis\n\nOpen gaps below are regenerated by `arch-wiki update-gap-analysis` between the\nmarkers. Notes outside the managed region are preserved.\n\n";
@@ -10946,11 +11035,11 @@ async function updateGapAnalysis(input, deps) {
   const { repo } = deps;
   const sorted = [...input.gaps].sort((a, b) => a.driver.localeCompare(b.driver));
   const body = sorted.map((g) => `- [[${g.driver}]] \u2014 ${g.reason}`).join("\n");
-  const exists = await repo.exists(FILE2);
-  const content = exists ? await repo.read(FILE2) : null;
+  const exists = await repo.exists(FILE3);
+  const content = exists ? await repo.read(FILE3) : null;
   const next = replaceManagedRegion(content, START2, END2, body, SCAFFOLD2);
-  await repo.write(FILE2, next);
-  return { path: FILE2, created: !exists, gapCount: sorted.length };
+  await repo.write(FILE3, next);
+  return { path: FILE3, created: !exists, gapCount: sorted.length };
 }
 
 // src/application/usecases/DriverAssurance.ts
@@ -11039,7 +11128,7 @@ function gatherEpistemicDebt(g, ctx) {
 }
 
 // src/application/usecases/UpdateEpistemicDebt.ts
-var FILE3 = "epistemic-debt.md";
+var FILE4 = "epistemic-debt.md";
 var START3 = "<!-- arch-wiki:debt:start -->";
 var END3 = "<!-- arch-wiki:debt:end -->";
 var SCAFFOLD3 = "---\ntype: epistemic-debt\ntags: [epistemic-debt]\n---\n\n# Epistemic Debt\n\nDecay signals below are regenerated by `arch-wiki update-epistemic-debt` between\nthe markers (FPF B.3.4 \u2014 evidence is perishable). Notes outside the managed region\nare preserved. This is an internal health register (excluded from the Confluence mirror).\n\n";
@@ -11072,13 +11161,13 @@ async function updateEpistemicDebt(deps) {
     waivedSubjects
   });
   const body = rows.map((r) => `- **${LABEL2[r.kind]}** \xB7 [[${r.subject}]] \u2014 ${r.detail}`).join("\n");
-  const exists = await repo.exists(FILE3);
-  const content = exists ? await repo.read(FILE3) : null;
+  const exists = await repo.exists(FILE4);
+  const content = exists ? await repo.read(FILE4) : null;
   const next = replaceManagedRegion(content, START3, END3, body, SCAFFOLD3);
-  await repo.write(FILE3, next);
+  await repo.write(FILE4, next);
   const byKind = {};
   for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
-  return { path: FILE3, created: !exists, debtCount: rows.length, waived: waivedSubjects.size, byKind };
+  return { path: FILE4, created: !exists, debtCount: rows.length, waived: waivedSubjects.size, byKind };
 }
 
 // src/application/usecases/Waive.ts
@@ -11364,7 +11453,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.11.0";
+var PLUGIN_VERSION = "0.12.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
