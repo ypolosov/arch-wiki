@@ -1,5 +1,11 @@
 import { DomainError } from '../../domain/errors';
 import { upsertKeyedRow, KeyedTableSpec } from '../../domain/services/KeyedTable';
+import {
+  parseUtilityPriority,
+  parseUtilityTable,
+  rankUtilityTree,
+  RankedUtilityRow,
+} from '../../domain/services/UtilityTree';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
 export interface UpdateUtilityTreeInput {
@@ -19,6 +25,8 @@ export interface UpdateUtilityTreeResult {
   path: string;
   created: boolean;
   changed: boolean;
+  /** The whole tree ranked by the deterministic ScoringMethod (FPF A.19) after the upsert. */
+  ranked: RankedUtilityRow[];
 }
 
 const FILE = 'utility-tree.md';
@@ -55,8 +63,22 @@ export async function updateUtilityTree(
   const exists = await repo.exists(FILE);
   const content = exists ? await repo.read(FILE) : null;
   const keyLine = `[[${from}]]`;
-  const row = `| [[${from}]] | ${cell(input.scenario ?? '') || '—'} | ${cell(input.priority ?? '') || '—'} |`;
+  // Canonicalize a parseable ATAM priority to `Importance,Difficulty` (e.g. `(H,M)` → `H,M`); an
+  // unparseable value is stored verbatim so the `utility-priority-illformed` lint can flag it.
+  const rawPriority = (input.priority ?? '').trim();
+  const parsed = parseUtilityPriority(rawPriority);
+  const priorityCell = parsed
+    ? parsed.difficulty
+      ? `${parsed.importance},${parsed.difficulty}`
+      : parsed.importance
+    : rawPriority;
+  const row = `| [[${from}]] | ${cell(input.scenario ?? '') || '—'} | ${cell(priorityCell) || '—'} |`;
   const r = upsertKeyedRow(content, keyLine, row, SPEC);
   if (r.changed) await repo.write(FILE, r.content);
-  return { path: FILE, created: !exists, changed: r.changed };
+  return {
+    path: FILE,
+    created: !exists,
+    changed: r.changed,
+    ranked: rankUtilityTree(parseUtilityTable(r.content)),
+  };
 }

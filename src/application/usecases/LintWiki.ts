@@ -14,6 +14,7 @@ import {
 import { glossaryFindings, parseTermSheet } from '../../domain/services/Glossary';
 import { qaMeasureFinding } from '../../domain/services/QualityAttribute';
 import { adrOptionsEmptyFinding } from '../../domain/services/DecisionRecord';
+import { utilityPriorityFindings } from '../../domain/services/UtilityTree';
 import { kindOfPage } from '../../domain/model/WikiPage';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
@@ -84,6 +85,14 @@ export async function lintWiki(
     )
   ).filter((f): f is NonNullable<typeof f> => f != null);
   if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
+
+  // Utility-tree ScoringMethod well-formedness (FPF A.19): each priority cell must be an ATAM
+  // (Importance,Difficulty) H/M/L pair. Single derived register, keyed like the glossary.
+  const utilityPage = pages.find((p) => p.basename === 'utility-tree');
+  if (utilityPage) {
+    const uf = utilityPriorityFindings(utilityPage.relPath, await repo.read(utilityPage.relPath));
+    if (uf.length) findings = sortFindings([...findings, ...uf]);
+  }
 
   // Suppress findings recorded as a pre-existing baseline at adoption time.
   if (baselineList.length) {

@@ -10141,6 +10141,25 @@ async function pruneStorySnapshots(livePageIds, deps, options2 = {}) {
   };
 }
 
+// src/domain/services/SourceLoss.ts
+function sourceLossMessage(mode, subjects = []) {
+  switch (mode) {
+    case "repo-relative-link-neutralized":
+      return `neutralized ${subjects.length} repo-relative link(s) to plain text: ${subjects.join(", ")}`;
+    case "local-image-stubbed":
+      return `stubbed ${subjects.length} local image(s) as C4 diagram placeholder(s): ${subjects.join(", ")}`;
+    case "provenance-section-stripped":
+      return "stripped the `## Sources` provenance section (git source-of-truth is not mirrored)";
+    case "provenance-field-stripped":
+      return "stripped a `**Source:**` field citing the git source-of-truth";
+    case "repo-path-renamed":
+      return "neutralized repo-internal path reference(s) \u2014 git source-of-truth is not mirrored";
+  }
+}
+function sourceLoss(mode, subjects = []) {
+  return { mode, subjects: [...subjects], message: sourceLossMessage(mode, subjects) };
+}
+
 // src/application/usecases/RenderConfluencePayload.ts
 function normalizeBody2(s) {
   return `${s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/, "")}
@@ -10256,26 +10275,18 @@ async function renderConfluencePayload(deps) {
     const { masked, restore } = language ? protectStructuralSpans(englishBody, preserveTerms) : { masked: englishBody, restore: [] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings = [];
+    const losses = [];
     if (crossLinks.some((c) => !c.resolved)) {
       warnings.push(
         language != null ? "some cross-link targets are not yet published (reserved as pending links; resolve on pass 2)" : "some cross-link targets are not yet published (rendered as plain text)"
       );
     }
-    if (stripped.length > 0) {
-      warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(", ")}`);
-    }
-    if (stubbed.length > 0) {
-      warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(", ")}`);
-    }
-    if (sourcesStripped) {
-      warnings.push("stripped the `## Sources` provenance section (git source-of-truth is not mirrored)");
-    }
-    if (fieldsStripped) {
-      warnings.push("stripped a `**Source:**` field citing the git source-of-truth");
-    }
-    if (pathsNeutralized) {
-      warnings.push("neutralized repo-internal path reference(s) \u2014 git source-of-truth is not mirrored");
-    }
+    if (stripped.length > 0) losses.push(sourceLoss("repo-relative-link-neutralized", stripped));
+    if (stubbed.length > 0) losses.push(sourceLoss("local-image-stubbed", stubbed));
+    if (sourcesStripped) losses.push(sourceLoss("provenance-section-stripped"));
+    if (fieldsStripped) losses.push(sourceLoss("provenance-field-stripped"));
+    if (pathsNeutralized) losses.push(sourceLoss("repo-path-renamed"));
+    for (const l of losses) warnings.push(l.message);
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {
       warnings.push(
@@ -10300,7 +10311,8 @@ async function renderConfluencePayload(deps) {
       pageId: publishedMap.get(p.relPath) ?? null,
       ledgerPageVersion: ledgerVersion.get(p.relPath) ?? null,
       realizedBy,
-      warnings
+      warnings,
+      sourceLoss: losses
     });
   }
   const ordered = sortParentFirst([...envelopes.keys()], parents).map((s) => envelopes.get(s));
@@ -10920,6 +10932,80 @@ function adrOptionsEmptyFinding(basename2, relPath, status, content) {
   return null;
 }
 
+// src/domain/services/UtilityTree.ts
+var WEIGHT = { H: 3, M: 2, L: 1 };
+var UNSET = /* @__PURE__ */ new Set(["", "-", "\u2014", "\u2013", "n/a", "na", "tbd", "tba", "?"]);
+function isUnsetPriority(raw) {
+  return UNSET.has(raw.trim().toLowerCase());
+}
+function parseUtilityPriority(raw) {
+  const upper = raw.toUpperCase();
+  const letters = upper.replace(/[^A-Z]/g, "");
+  const tokens = upper.match(/[HML]/g);
+  if (!tokens) return null;
+  if (tokens.length === 1 && letters.length === 1) {
+    return { importance: tokens[0], difficulty: null };
+  }
+  if (tokens.length === 2 && letters.length === 2) {
+    return { importance: tokens[0], difficulty: tokens[1] };
+  }
+  return null;
+}
+function scoreUtility(p) {
+  return WEIGHT[p.importance] * 3 + WEIGHT[p.difficulty ?? "M"];
+}
+function tierOf(p) {
+  return p.importance === "H" ? "top" : p.importance === "M" ? "medium" : "low";
+}
+function parseUtilityTable(content) {
+  const rows = [];
+  for (const line of content.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("|")) continue;
+    const cells = t.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells.length < 3) continue;
+    const first = cells[0];
+    if (/^driver$/i.test(first)) continue;
+    if (/^:?-+:?$/.test(first.replace(/\s/g, ""))) continue;
+    const m = first.match(/\[\[([^\]|#]+)/);
+    rows.push({ driver: (m ? m[1] : first).trim(), scenario: cells[1], priority: cells[2] });
+  }
+  return rows;
+}
+function rankUtilityTree(rows) {
+  const enriched = rows.map((r) => {
+    const parsed = parseUtilityPriority(r.priority);
+    return {
+      ...r,
+      parsed,
+      score: parsed ? scoreUtility(parsed) : null,
+      tier: parsed ? tierOf(parsed) : null,
+      rank: null
+    };
+  });
+  const scored = enriched.filter((r) => r.score != null).sort((a, b) => b.score - a.score || a.driver.localeCompare(b.driver));
+  scored.forEach((r, i) => {
+    r.rank = i + 1;
+  });
+  const rest = enriched.filter((r) => r.score == null).sort((a, b) => a.driver.localeCompare(b.driver));
+  return [...scored, ...rest];
+}
+function utilityPriorityFindings(relPath, content) {
+  const out = [];
+  for (const r of parseUtilityTable(content)) {
+    if (isUnsetPriority(r.priority)) continue;
+    if (!parseUtilityPriority(r.priority)) {
+      out.push({
+        rule: "utility-priority-illformed",
+        severity: "low",
+        file: relPath,
+        message: `Utility-tree row ${r.driver} priority "${r.priority}" is not an ATAM (Importance,Difficulty) H/M/L pair (FPF A.19)`
+      });
+    }
+  }
+  return out;
+}
+
 // src/application/usecases/LintWiki.ts
 async function lintWiki(repo, opts = {}) {
   const [pages, allFilesList, baselineList] = await Promise.all([
@@ -10956,6 +11042,11 @@ async function lintWiki(repo, opts = {}) {
     )
   )).filter((f) => f != null);
   if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
+  const utilityPage = pages.find((p) => p.basename === "utility-tree");
+  if (utilityPage) {
+    const uf = utilityPriorityFindings(utilityPage.relPath, await repo.read(utilityPage.relPath));
+    if (uf.length) findings = sortFindings([...findings, ...uf]);
+  }
   if (baselineList.length) {
     const baseline = new Set(baselineList);
     findings = findings.filter((f) => !baseline.has(baselineKey(f)));
@@ -11035,6 +11126,35 @@ function checkC4Consistency(model, g, policy) {
       message: `entity ${p.basename} has no matching C4 element`
     });
   }
+  if (model.relationships && model.relationships.length) {
+    const elementIds = new Set(model.elements.map((e) => e.id));
+    for (const rel of [...model.relationships].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (ignore.has(rel.id)) continue;
+      const missing = [rel.source, rel.target].filter((x) => x && !elementIds.has(x));
+      if (missing.length) {
+        findings.push({
+          rule: "c4-relationship-dangling",
+          severity: "low",
+          message: `C4 relationship "${rel.id}" (${rel.source} \u2192 ${rel.target}) references unknown element(s): ${missing.join(", ")}`
+        });
+      }
+    }
+  }
+  if (model.views && model.views.length) {
+    const drawn = /* @__PURE__ */ new Set();
+    for (const v of model.views) for (const id of v.elementIds) drawn.add(id);
+    for (const el of sortedElements) {
+      if (!required.has(el.kind.toLowerCase())) continue;
+      if (ignore.has(el.id)) continue;
+      if (!drawn.has(el.id)) {
+        findings.push({
+          rule: "c4-element-in-no-view",
+          severity: "low",
+          message: `C4 ${el.kind} "${el.id}" appears in no view (undrawn)`
+        });
+      }
+    }
+  }
   return sortFindings(findings.filter((f) => !ignore.has(f.rule)));
 }
 
@@ -11043,6 +11163,8 @@ var C4_BASELINE_FILE = ".arch-wiki/c4-baseline.json";
 async function validateC4(model, repo, opts) {
   const graph = buildGraph(await repo.loadPages());
   const entityCount = pagesOfKind(graph, ["entity"]).length;
+  const relationshipCount = model.relationships ? model.relationships.length : null;
+  const viewCount = model.views ? model.views.length : null;
   const all = checkC4Consistency(model, graph, opts.policy);
   if (opts.establishBaseline) {
     const keys = [...new Set(all.map(baselineKey))].sort();
@@ -11053,6 +11175,8 @@ async function validateC4(model, repo, opts) {
       counts: { high: 0, medium: 0, low: 0 },
       elementCount: model.elements.length,
       entityCount,
+      relationshipCount,
+      viewCount,
       baselineEstablished: keys.length
     };
   }
@@ -11068,7 +11192,7 @@ async function validateC4(model, repo, opts) {
   }
   const counts = { high: 0, medium: 0, low: 0 };
   for (const f of findings) counts[f.severity] += 1;
-  return { findings, counts, elementCount: model.elements.length, entityCount };
+  return { findings, counts, elementCount: model.elements.length, entityCount, relationshipCount, viewCount };
 }
 
 // src/adapters/c4/LikeC4ModelReader.ts
@@ -11079,13 +11203,68 @@ function lastSegment2(id) {
 function asRecord(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : null;
 }
-function pickElements(root) {
-  if (root.elements !== void 0) return root.elements;
+function pickKeyed(root, key) {
+  if (root[key] !== void 0) return root[key];
   const model = asRecord(root.model);
-  if (model?.elements !== void 0) return model.elements;
+  if (model?.[key] !== void 0) return model[key];
   const project = asRecord(root.project);
-  if (project?.elements !== void 0) return project.elements;
+  if (project?.[key] !== void 0) return project[key];
   return void 0;
+}
+function eachEntry(container) {
+  const out = [];
+  if (Array.isArray(container)) {
+    for (const e of container) {
+      const rec = asRecord(e);
+      if (rec) out.push([void 0, rec]);
+    }
+  } else {
+    const map = asRecord(container);
+    if (map) for (const [k, e] of Object.entries(map)) {
+      const rec = asRecord(e);
+      if (rec) out.push([k, rec]);
+    }
+  }
+  return out;
+}
+function endpointId(v) {
+  if (typeof v === "string") return v;
+  const r = asRecord(v);
+  if (r && typeof r.model === "string") return r.model;
+  if (r && typeof r.id === "string") return r.id;
+  return "";
+}
+function parseRelationships(root) {
+  const container = pickKeyed(root, "relations") ?? pickKeyed(root, "relationships");
+  if (container === void 0) return void 0;
+  const out = [];
+  for (const [key, raw] of eachEntry(container)) {
+    const id = String(raw.id ?? key ?? "");
+    const source = endpointId(raw.source);
+    const target = endpointId(raw.target);
+    if (id && source && target) out.push({ id, source, target, title: String(raw.title ?? "") });
+  }
+  return out;
+}
+function parseViews(root) {
+  const container = pickKeyed(root, "views");
+  if (container === void 0) return void 0;
+  const out = [];
+  for (const [key, raw] of eachEntry(container)) {
+    const id = String(raw.id ?? key ?? "");
+    if (!id) continue;
+    const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+    const elementIds = [
+      ...new Set(
+        nodes.map((n) => {
+          const r = asRecord(n);
+          return r && typeof r.modelRef === "string" ? r.modelRef : "";
+        }).filter((s) => s !== "")
+      )
+    ];
+    out.push({ id, title: String(raw.title ?? id), elementIds });
+  }
+  return out;
 }
 function toElement(raw, key) {
   const id = String(raw.id ?? key ?? "");
@@ -11096,21 +11275,16 @@ function toElement(raw, key) {
 function normalizeC4ModelJson(raw) {
   const root = asRecord(raw);
   if (!root) return { elements: [] };
-  const container = pickElements(root);
   const elements = [];
-  if (Array.isArray(container)) {
-    for (const e of container) {
-      const rec = asRecord(e);
-      if (rec) elements.push(toElement(rec, void 0));
-    }
-  } else {
-    const map = asRecord(container);
-    if (map) for (const [key, e] of Object.entries(map)) {
-      const rec = asRecord(e);
-      if (rec) elements.push(toElement(rec, key));
-    }
+  for (const [key, rec] of eachEntry(pickKeyed(root, "elements"))) {
+    elements.push(toElement(rec, key));
   }
-  return { elements: elements.filter((e) => e.id !== "" && e.kind !== "") };
+  const model = { elements: elements.filter((e) => e.id !== "" && e.kind !== "") };
+  const relationships = parseRelationships(root);
+  if (relationships) model.relationships = relationships;
+  const views = parseViews(root);
+  if (views) model.views = views;
+  return model;
 }
 function parseC4Sources(text) {
   const elements = [];
@@ -11183,10 +11357,18 @@ async function updateUtilityTree(input, deps) {
   const exists = await repo.exists(FILE2);
   const content = exists ? await repo.read(FILE2) : null;
   const keyLine = `[[${from}]]`;
-  const row = `| [[${from}]] | ${cell2(input.scenario ?? "") || "\u2014"} | ${cell2(input.priority ?? "") || "\u2014"} |`;
+  const rawPriority = (input.priority ?? "").trim();
+  const parsed = parseUtilityPriority(rawPriority);
+  const priorityCell = parsed ? parsed.difficulty ? `${parsed.importance},${parsed.difficulty}` : parsed.importance : rawPriority;
+  const row = `| [[${from}]] | ${cell2(input.scenario ?? "") || "\u2014"} | ${cell2(priorityCell) || "\u2014"} |`;
   const r = upsertKeyedRow(content, keyLine, row, SPEC2);
   if (r.changed) await repo.write(FILE2, r.content);
-  return { path: FILE2, created: !exists, changed: r.changed };
+  return {
+    path: FILE2,
+    created: !exists,
+    changed: r.changed,
+    ranked: rankUtilityTree(parseUtilityTable(r.content))
+  };
 }
 
 // src/domain/services/ManagedRegion.ts
@@ -11413,6 +11595,18 @@ function hasSection(sectionSet, marker) {
 function hasAnySection(sectionSet, markers) {
   return markers.some((m) => sectionSet.has(normalizeSection(m)));
 }
+var OPTIONS_MARKERS = [
+  "Considered Options",
+  "Options",
+  "Alternatives Considered",
+  "Considered Alternatives",
+  "Options Considered",
+  "Alternatives"
+];
+function hasOptionsEvidence(sectionSet, headings) {
+  if (hasAnySection(sectionSet, OPTIONS_MARKERS)) return true;
+  return headings.some((h) => /^\s*(option|alternative)s?\s+\w+/i.test(h));
+}
 function computeAdequacy(g, ctx = {}) {
   const assurance = ctx.assurance ?? /* @__PURE__ */ new Map();
   const debt = ctx.debtSubjects ?? /* @__PURE__ */ new Set();
@@ -11432,7 +11626,7 @@ function computeAdequacy(g, ctx = {}) {
       const status = String(p.frontmatter.status ?? "").toLowerCase();
       const statusOk = VALID_ADR_STATUS.has(status) || hasSection(sections, "Status");
       bases.push({ name: "drivers-linked", ok: linksDrivers > 0, critical: true, detail: `${linksDrivers} driver link(s)` });
-      bases.push({ name: "options", ok: hasAnySection(sections, ["Considered Options", "Options"]), critical: true });
+      bases.push({ name: "options", ok: hasOptionsEvidence(sections, p.headings), critical: true });
       bases.push({ name: "decision", ok: hasAnySection(sections, ["Decision Outcome", "Decision"]), critical: true });
       bases.push({ name: "consequences", ok: hasSection(sections, "Consequences"), critical: false });
       bases.push({ name: "status", ok: statusOk, critical: true, detail: status || "(section)" });
@@ -11660,7 +11854,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.20.0";
+var PLUGIN_VERSION = "0.21.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

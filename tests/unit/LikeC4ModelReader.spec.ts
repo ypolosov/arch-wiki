@@ -57,3 +57,44 @@ describe('parseC4Sources (regex fallback)', () => {
     expect(ids).toContain('container:backend');
   });
 });
+
+describe('normalizeC4ModelJson — relationships & views (likec4 export json)', () => {
+  it('parses the layouted `relations` map with `{model:id}` endpoints', () => {
+    const m = normalizeC4ModelJson({
+      elements: { a: { id: 'a', kind: 'system' }, b: { id: 'b', kind: 'system' } },
+      relations: {
+        r1: { id: 'r1', title: 'uses', source: { model: 'a' }, target: { model: 'b' } },
+      },
+    });
+    expect(m.relationships).toEqual([{ id: 'r1', source: 'a', target: 'b', title: 'uses' }]);
+  });
+
+  it('parses views and collects drawn element ids from each node modelRef', () => {
+    const m = normalizeC4ModelJson({
+      elements: { a: { id: 'a', kind: 'system' } },
+      views: {
+        index: {
+          id: 'index',
+          title: 'C4 / index',
+          nodes: [{ id: 'n1', modelRef: 'a' }, { id: 'n2', modelRef: 'a' }, { id: 'n3' }],
+          edges: [],
+        },
+      },
+    });
+    expect(m.views).toEqual([{ id: 'index', title: 'C4 / index', elementIds: ['a'] }]); // deduped, node w/o modelRef dropped
+  });
+
+  it('accepts bare-string relationship endpoints too', () => {
+    const m = normalizeC4ModelJson({
+      elements: [{ id: 'a', kind: 'system' }, { id: 'b', kind: 'system' }],
+      relationships: [{ id: 'r', source: 'a', target: 'b' }],
+    });
+    expect(m.relationships).toEqual([{ id: 'r', source: 'a', target: 'b', title: '' }]);
+  });
+
+  it('leaves relationships/views UNDEFINED when the source omits them (skip-safely)', () => {
+    const m = normalizeC4ModelJson({ elements: [{ id: 'a', kind: 'system' }] });
+    expect(m.relationships).toBeUndefined();
+    expect(m.views).toBeUndefined();
+  });
+});

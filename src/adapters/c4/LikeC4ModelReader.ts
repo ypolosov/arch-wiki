@@ -1,4 +1,4 @@
-import { C4Element, C4Model } from '../../domain/services/C4Consistency';
+import { C4Element, C4Model, C4Relationship, C4View } from '../../domain/services/C4Consistency';
 
 /**
  * Normalizes an external LikeC4 model dump into the neutral `C4Model` Core
@@ -18,14 +18,79 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-/** Find the `elements` container at the root or one nesting level down. */
-function pickElements(root: Record<string, unknown>): unknown {
-  if (root.elements !== undefined) return root.elements;
+/** Find a keyed container (`elements`/`relations`/`views`) at the root or one nesting level down. */
+function pickKeyed(root: Record<string, unknown>, key: string): unknown {
+  if (root[key] !== undefined) return root[key];
   const model = asRecord(root.model);
-  if (model?.elements !== undefined) return model.elements;
+  if (model?.[key] !== undefined) return model[key];
   const project = asRecord(root.project);
-  if (project?.elements !== undefined) return project.elements;
+  if (project?.[key] !== undefined) return project[key];
   return undefined;
+}
+
+/** Iterate a container that may be an array or an id-keyed map, yielding [key, record] pairs. */
+function eachEntry(container: unknown): Array<[string | undefined, Record<string, unknown>]> {
+  const out: Array<[string | undefined, Record<string, unknown>]> = [];
+  if (Array.isArray(container)) {
+    for (const e of container) {
+      const rec = asRecord(e);
+      if (rec) out.push([undefined, rec]);
+    }
+  } else {
+    const map = asRecord(container);
+    if (map) for (const [k, e] of Object.entries(map)) {
+      const rec = asRecord(e);
+      if (rec) out.push([k, rec]);
+    }
+  }
+  return out;
+}
+
+/** A relationship endpoint may be a bare id string or `{ model: id }` / `{ id }` (layouted export). */
+function endpointId(v: unknown): string {
+  if (typeof v === 'string') return v;
+  const r = asRecord(v);
+  if (r && typeof r.model === 'string') return r.model;
+  if (r && typeof r.id === 'string') return r.id;
+  return '';
+}
+
+function parseRelationships(root: Record<string, unknown>): C4Relationship[] | undefined {
+  // `relations` is the instance map in `likec4 export json`; `relationships` is an alt name.
+  // (`specification.relationships` is the KIND spec, not instances — never traversed here.)
+  const container = pickKeyed(root, 'relations') ?? pickKeyed(root, 'relationships');
+  if (container === undefined) return undefined;
+  const out: C4Relationship[] = [];
+  for (const [key, raw] of eachEntry(container)) {
+    const id = String(raw.id ?? key ?? '');
+    const source = endpointId(raw.source);
+    const target = endpointId(raw.target);
+    if (id && source && target) out.push({ id, source, target, title: String(raw.title ?? '') });
+  }
+  return out;
+}
+
+function parseViews(root: Record<string, unknown>): C4View[] | undefined {
+  const container = pickKeyed(root, 'views');
+  if (container === undefined) return undefined;
+  const out: C4View[] = [];
+  for (const [key, raw] of eachEntry(container)) {
+    const id = String(raw.id ?? key ?? '');
+    if (!id) continue;
+    const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+    const elementIds = [
+      ...new Set(
+        nodes
+          .map((n) => {
+            const r = asRecord(n);
+            return r && typeof r.modelRef === 'string' ? r.modelRef : '';
+          })
+          .filter((s): s is string => s !== ''),
+      ),
+    ];
+    out.push({ id, title: String(raw.title ?? id), elementIds });
+  }
+  return out;
 }
 
 function toElement(raw: Record<string, unknown>, key: string | undefined): C4Element {
@@ -38,21 +103,18 @@ function toElement(raw: Record<string, unknown>, key: string | undefined): C4Ele
 export function normalizeC4ModelJson(raw: unknown): C4Model {
   const root = asRecord(raw);
   if (!root) return { elements: [] };
-  const container = pickElements(root);
   const elements: C4Element[] = [];
-  if (Array.isArray(container)) {
-    for (const e of container) {
-      const rec = asRecord(e);
-      if (rec) elements.push(toElement(rec, undefined));
-    }
-  } else {
-    const map = asRecord(container);
-    if (map) for (const [key, e] of Object.entries(map)) {
-      const rec = asRecord(e);
-      if (rec) elements.push(toElement(rec, key));
-    }
+  for (const [key, rec] of eachEntry(pickKeyed(root, 'elements'))) {
+    elements.push(toElement(rec, key));
   }
-  return { elements: elements.filter((e) => e.id !== '' && e.kind !== '') };
+  const model: C4Model = { elements: elements.filter((e) => e.id !== '' && e.kind !== '') };
+  // Relationships + views are OPTIONAL (a `read-project-summary` may omit them): parse when present,
+  // leave undefined when absent so Core skips those checks rather than inventing an empty model.
+  const relationships = parseRelationships(root);
+  if (relationships) model.relationships = relationships;
+  const views = parseViews(root);
+  if (views) model.views = views;
+  return model;
 }
 
 /**

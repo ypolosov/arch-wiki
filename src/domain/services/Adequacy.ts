@@ -66,6 +66,28 @@ function hasAnySection(sectionSet: ReadonlySet<string>, markers: readonly string
   return markers.some((m) => sectionSet.has(normalizeSection(m)));
 }
 
+/** Canonical + synonymous headings for the ADR candidate set (FPF C.32.ADA). */
+const OPTIONS_MARKERS = [
+  'Considered Options',
+  'Options',
+  'Alternatives Considered',
+  'Considered Alternatives',
+  'Options Considered',
+  'Alternatives',
+];
+
+/**
+ * Options-section evidence (FPF C.32.ADA — a decision needs a live candidate set). Accepts the
+ * MADR-canonical `## Considered Options`, common synonyms (`## Alternatives Considered`, `## Options`,
+ * …), AND an `### Option N` / `### Alternative N` sub-block layout — each is a genuine candidate set.
+ * Broadened after a gt adequacy review surfaced two Core false-negatives: real alternatives present
+ * under a heading the strict matcher did not recognize.
+ */
+function hasOptionsEvidence(sectionSet: ReadonlySet<string>, headings: readonly string[]): boolean {
+  if (hasAnySection(sectionSet, OPTIONS_MARKERS)) return true;
+  return headings.some((h) => /^\s*(option|alternative)s?\s+\w+/i.test(h));
+}
+
 /** Compute the adequacy of every scored artifact. Deterministic; sorted by file. */
 export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): ArtifactAdequacy[] {
   const assurance = ctx.assurance ?? new Map<string, DriverAssurance>();
@@ -91,7 +113,7 @@ export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): Ar
       // (`## Decision Outcome`, frontmatter `status:`).
       const statusOk = VALID_ADR_STATUS.has(status) || hasSection(sections, 'Status');
       bases.push({ name: 'drivers-linked', ok: linksDrivers > 0, critical: true, detail: `${linksDrivers} driver link(s)` });
-      bases.push({ name: 'options', ok: hasAnySection(sections, ['Considered Options', 'Options']), critical: true });
+      bases.push({ name: 'options', ok: hasOptionsEvidence(sections, p.headings), critical: true });
       bases.push({ name: 'decision', ok: hasAnySection(sections, ['Decision Outcome', 'Decision']), critical: true });
       bases.push({ name: 'consequences', ok: hasSection(sections, 'Consequences'), critical: false });
       bases.push({ name: 'status', ok: statusOk, critical: true, detail: status || '(section)' });

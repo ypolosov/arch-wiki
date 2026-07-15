@@ -51,7 +51,12 @@ wikilink that carries a **record id** — an id-shaped alias or an anchor (`[[ri
 that id (`C-003`) instead of the generic name, so traceability and grammar survive (`Resolves C-003`, not
 `Resolves the risk register`). Rename seams are cleaned: a duplicated article (`the the backlog`) and an
 adjacent repeat of the same phrase (`the source brief, the source brief`) collapse to one (v0.8.6).
-`data.pages[].warnings` lists each curation. The curation runs in pipeline order **after** cross-link
+`data.pages[].warnings` lists each curation as a human string; `data.pages[].sourceLoss` (v0.21) is the
+**typed** companion — each Controlled-Semantic-Coarsening loss (FPF A.6.3.CSC) as `{mode, message,
+subjects}` with a closed `mode` vocabulary (`repo-relative-link-neutralized`, `local-image-stubbed`,
+`provenance-section-stripped`, `provenance-field-stripped`, `repo-path-renamed`). The `message` is
+byte-identical to the matching `warnings` string; publication-state notices (unresolved cross-links,
+un-linked realizing issues) are NOT source losses and stay in `warnings` only. The curation runs in pipeline order **after** cross-link
 resolution + repo-relative-link neutralisation (so a link whose label is itself a path, `[c4/src/x.c4](…)`,
 is collapsed and renamed — no broken empty link) and **before** the C4-image stub (so the stub keeps its
 diagram `source` path). A markdown-form cross-link to a mirrored neighbour (`[ADR-0023](0023-…md)`) is

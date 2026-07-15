@@ -22,6 +22,7 @@ import {
   stripSourcesSection,
   stubLocalImages,
 } from '../../domain/services/ConfluenceTree';
+import { SourceLoss, sourceLoss } from '../../domain/services/SourceLoss';
 import { LedgerStorePort } from '../ports/LedgerStorePort';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
@@ -64,6 +65,13 @@ export interface PageEnvelope {
   /** Reverse trace edge (v0.8): Jira issues that realize this artifact (from `realized_by` frontmatter). */
   realizedBy: IssueRef[];
   warnings: string[];
+  /**
+   * Typed Controlled-Semantic-Coarsening losses (FPF A.6.3.CSC) — a machine-readable classification
+   * of WHAT the mirror deliberately dropped/renamed from the git canon (a subset of `warnings`, whose
+   * human strings stay byte-identical). Publication-state notices (unresolved cross-links, un-linked
+   * realizing issues) are NOT source losses and stay in `warnings` only.
+   */
+  sourceLoss: SourceLoss[];
 }
 
 /** A realizing issue link for the reverse trace edge on a mirror page. */
@@ -270,6 +278,10 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       : { masked: englishBody, restore: [] as ProtectedSpan[] };
     const alreadyPublished = publishedMap.has(p.relPath);
     const warnings: string[] = [];
+    // Typed Controlled-Semantic-Coarsening losses (FPF A.6.3.CSC). The human `message` of each is
+    // byte-identical to the historical free-text warning and appended in the SAME order, so the
+    // `warnings[]` display surface is unchanged — the typing is purely additive.
+    const losses: SourceLoss[] = [];
     if (crossLinks.some((c) => !c.resolved)) {
       warnings.push(
         language != null
@@ -277,21 +289,12 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
           : 'some cross-link targets are not yet published (rendered as plain text)',
       );
     }
-    if (stripped.length > 0) {
-      warnings.push(`neutralized ${stripped.length} repo-relative link(s) to plain text: ${stripped.join(', ')}`);
-    }
-    if (stubbed.length > 0) {
-      warnings.push(`stubbed ${stubbed.length} local image(s) as C4 diagram placeholder(s): ${stubbed.join(', ')}`);
-    }
-    if (sourcesStripped) {
-      warnings.push('stripped the `## Sources` provenance section (git source-of-truth is not mirrored)');
-    }
-    if (fieldsStripped) {
-      warnings.push('stripped a `**Source:**` field citing the git source-of-truth');
-    }
-    if (pathsNeutralized) {
-      warnings.push('neutralized repo-internal path reference(s) — git source-of-truth is not mirrored');
-    }
+    if (stripped.length > 0) losses.push(sourceLoss('repo-relative-link-neutralized', stripped));
+    if (stubbed.length > 0) losses.push(sourceLoss('local-image-stubbed', stubbed));
+    if (sourcesStripped) losses.push(sourceLoss('provenance-section-stripped'));
+    if (fieldsStripped) losses.push(sourceLoss('provenance-field-stripped'));
+    if (pathsNeutralized) losses.push(sourceLoss('repo-path-renamed'));
+    for (const l of losses) warnings.push(l.message);
     const unlinked = realizedBy.filter((r) => !r.url);
     if (unlinked.length > 0) {
       // Two distinct causes (R6): no site URL at all (every key omitted) vs a known non-Jira
@@ -321,6 +324,7 @@ export async function renderConfluencePayload(deps: RenderConfluenceDeps): Promi
       ledgerPageVersion: ledgerVersion.get(p.relPath) ?? null,
       realizedBy,
       warnings,
+      sourceLoss: losses,
     });
   }
 

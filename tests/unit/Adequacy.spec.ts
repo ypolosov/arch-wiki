@@ -56,6 +56,30 @@ describe('computeAdequacy', () => {
     expect(adr.bases.find((b) => b.name === 'decision')!.ok).toBe(false);
   });
 
+  it('recognizes options under synonym headings (no Core false-negative)', () => {
+    // gt review: ADR-0002 used `## Alternatives Considered`, ADR-0004 used `### Option N` blocks —
+    // both are a real candidate set, previously mis-flagged as inadequate on `options`.
+    for (const optionsHeading of ['Alternatives Considered', 'Options Considered', 'Alternatives']) {
+      const g = buildGraph([fullAdr({ headings: [optionsHeading, 'Decision Outcome', 'Consequences'] }), driverPage]);
+      expect(adrOf(g).bases.find((b) => b.name === 'options')!.ok).toBe(true);
+    }
+  });
+
+  it('recognizes an `### Option N` / `### Alternative N` sub-block layout', () => {
+    const g = buildGraph([
+      fullAdr({ headings: ['Context', 'Option 1', 'Option 2', 'Decision Outcome', 'Consequences'] }),
+      driverPage,
+    ]);
+    expect(adrOf(g).bases.find((b) => b.name === 'options')!.ok).toBe(true);
+  });
+
+  it('still flags a genuinely optionless ADR (no over-broadening)', () => {
+    const g = buildGraph([fullAdr({ headings: ['Context', 'Decision Outcome', 'Consequences'] }), driverPage]);
+    const adr = adrOf(g);
+    expect(adr.bases.find((b) => b.name === 'options')!.ok).toBe(false);
+    expect(adr.band).toBe('inadequate');
+  });
+
   it('ADR with an invalid status → inadequate', () => {
     expect(adrOf(buildGraph([fullAdr({ frontmatter: { status: 'draft' } }), driverPage])).band).toBe('inadequate');
   });

@@ -101,3 +101,53 @@ describe('checkC4Consistency (pure)', () => {
     expect(findings[0]!.message < findings[1]!.message).toBe(true);
   });
 });
+
+describe('checkC4Consistency — relationships & views (W13, skip-safely)', () => {
+  const g = graph(entity('a'), entity('b'));
+
+  it('flags a dangling relationship endpoint (low)', () => {
+    const model = {
+      elements: [el('a', 'system'), el('b', 'system')],
+      relationships: [
+        { id: 'r1', source: 'a', target: 'b', title: 'uses' }, // resolves → ok
+        { id: 'r2', source: 'a', target: 'ghost', title: 'calls' }, // ghost is unknown
+      ],
+    };
+    const dangling = checkC4Consistency(model, g, POLICY).filter((f) => f.rule === 'c4-relationship-dangling');
+    expect(dangling).toHaveLength(1);
+    expect(dangling[0]!.severity).toBe('low');
+    expect(dangling[0]!.message).toContain('ghost');
+  });
+
+  it('flags a documented-kind element drawn in no view (low), passes drawn ones', () => {
+    const model = {
+      elements: [el('a', 'system'), el('b', 'system')],
+      views: [{ id: 'ctx', title: 'Context', elementIds: ['a'] }],
+    };
+    const undrawn = checkC4Consistency(model, g, POLICY).filter((f) => f.rule === 'c4-element-in-no-view');
+    expect(undrawn).toHaveLength(1);
+    expect(undrawn[0]!.severity).toBe('low');
+    expect(undrawn[0]!.message).toContain('"b"');
+  });
+
+  it('runs neither new check when relationships/views are absent (skip-safely, never invents)', () => {
+    const rules = checkC4Consistency({ elements: [el('a', 'system')] }, graph(entity('a')), POLICY).map((f) => f.rule);
+    expect(rules).not.toContain('c4-relationship-dangling');
+    expect(rules).not.toContain('c4-element-in-no-view');
+  });
+
+  it('ignore suppresses the new rules by subject id and by rule name', () => {
+    const model = {
+      elements: [el('a', 'system'), el('b', 'system')],
+      relationships: [{ id: 'r2', source: 'a', target: 'ghost', title: '' }],
+      views: [{ id: 'ctx', title: 'Context', elementIds: ['a'] }],
+    };
+    const isNew = (r: string) => r === 'c4-relationship-dangling' || r === 'c4-element-in-no-view';
+    expect(checkC4Consistency(model, g, { ...POLICY, ignore: ['r2', 'b'] }).filter((f) => isNew(f.rule))).toEqual([]);
+    expect(
+      checkC4Consistency(model, g, { ...POLICY, ignore: ['c4-relationship-dangling', 'c4-element-in-no-view'] }).filter(
+        (f) => isNew(f.rule),
+      ),
+    ).toEqual([]);
+  });
+});

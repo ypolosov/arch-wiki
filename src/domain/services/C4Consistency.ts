@@ -20,8 +20,27 @@ export interface C4Element {
   tags?: string[];
 }
 
+/** A model relationship (edge). Endpoints are fully-qualified element ids. */
+export interface C4Relationship {
+  id: string;
+  source: string;
+  target: string;
+  title: string;
+}
+
+/** A view (FPF E.17.0 View): the set of model elements it draws (from each node's `modelRef`). */
+export interface C4View {
+  id: string;
+  title: string;
+  elementIds: string[];
+}
+
 export interface C4Model {
   elements: C4Element[];
+  /** Relationships, when the source provides them; ABSENT ⇒ not checked (skip-safely, never invented). */
+  relationships?: C4Relationship[];
+  /** Views, when the source provides them; ABSENT ⇒ not checked (skip-safely, never invented). */
+  views?: C4View[];
 }
 
 export interface C4ConsistencyPolicy {
@@ -127,6 +146,43 @@ export function checkC4Consistency(
       file: p.relPath,
       message: `entity ${p.basename} has no matching C4 element`,
     });
+  }
+
+  // Direction 3 — model integrity (FPF E.17.2 Correspondence): a relationship endpoint that names no
+  // known element. Only when the source supplied relationships (skip-safely — never invented). A new
+  // rule, so shipped `low` + baseline/ignore-suppressible; near-zero on a well-formed export.
+  if (model.relationships && model.relationships.length) {
+    const elementIds = new Set(model.elements.map((e) => e.id));
+    for (const rel of [...model.relationships].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (ignore.has(rel.id)) continue;
+      const missing = [rel.source, rel.target].filter((x) => x && !elementIds.has(x));
+      if (missing.length) {
+        findings.push({
+          rule: 'c4-relationship-dangling',
+          severity: 'low',
+          message: `C4 relationship "${rel.id}" (${rel.source} → ${rel.target}) references unknown element(s): ${missing.join(', ')}`,
+        });
+      }
+    }
+  }
+
+  // Direction 4 — structural-view coverage (FPF C.30.ASV / E.17.0): a documented-kind element drawn
+  // in no view. Only when views are present (skip-safely); restricted to `requireDocumentation` kinds
+  // to stay low-noise. New rule → `low` + suppressible.
+  if (model.views && model.views.length) {
+    const drawn = new Set<string>();
+    for (const v of model.views) for (const id of v.elementIds) drawn.add(id);
+    for (const el of sortedElements) {
+      if (!required.has(el.kind.toLowerCase())) continue;
+      if (ignore.has(el.id)) continue;
+      if (!drawn.has(el.id)) {
+        findings.push({
+          rule: 'c4-element-in-no-view',
+          severity: 'low',
+          message: `C4 ${el.kind} "${el.id}" appears in no view (undrawn)`,
+        });
+      }
+    }
   }
 
   // Rule-level ignore (an entry naming a whole rule suppresses it).

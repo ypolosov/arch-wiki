@@ -176,9 +176,19 @@ Audit and report (then propose fixes / append to `risks.md`):
   empty `## Considered Options` section — a decision recorded with no alternatives (robust to any
   option format). An ABSENT section is left to `/arch-wiki:review` adequacy; whether a *filled* set is
   substantive/distinct is an LLM judgement, not a deterministic count.
+- Utility-tree ScoringMethod (`utility-priority-illformed`, low, FPF A.19): a `utility-tree.md`
+  priority cell that is present but not an ATAM **(Importance,Difficulty)** H/M/L pair — accepts the
+  short marker `H` and the pair `H,M`/`(H,M)`/`H/M`; an unset placeholder (`—`, TBD) is never flagged.
+  The tree is an **Evaluation CharacteristicSpace**: `update-utility-tree` returns the whole tree
+  `ranked` by a deterministic importance-dominant score (bands L 4–6 < M 7–9 < H 10–12).
 - C4 element ⟷ wiki entity drift — the **deterministic verdict is
   `arch-wiki validate-c4`** (model from the LikeC4 MCP / `likec4 export json`); this
-  LLM-lint line only adds nuance the rule cannot judge.
+  LLM-lint line only adds nuance the rule cannot judge. When the model source carries **relationships**
+  and **views** (full `likec4 export json`; the MCP `read-project-summary` may omit relationships),
+  `validate-c4` also reports `c4-relationship-dangling` (an edge endpoint that names no element — model
+  integrity, FPF E.17.2) and `c4-element-in-no-view` (a documented-kind element drawn in no view —
+  FPF C.30.ASV). Both are **skip-safely**: absent from a summary-only model, they never fire (never
+  invented) — low severity, baseline/ignore-suppressible.
 - arc42 view-hub correspondence (`view-hub-uncorresponded`, low, FPF E.17.0/C.34): an arc42 hub
   tagged `c4` (a **viewpoint binding**) that shows no C4 view — no `## C4 …` section. The `c4` tag is
   the viewpoint↔view correspondence marker; a bound hub must actually present its view.

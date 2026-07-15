@@ -25,6 +25,9 @@ export interface ValidateC4Report {
   counts: { high: number; medium: number; low: number };
   elementCount: number;
   entityCount: number;
+  /** Relationships/views parsed from the model (null when the source omitted them — skip-safely). */
+  relationshipCount: number | null;
+  viewCount: number | null;
   /** Set on --establish-baseline: number of baselined mismatch keys written. */
   baselineEstablished?: number;
 }
@@ -45,6 +48,8 @@ export async function validateC4(
 ): Promise<ValidateC4Report> {
   const graph = buildGraph(await repo.loadPages());
   const entityCount = pagesOfKind(graph, ['entity']).length;
+  const relationshipCount = model.relationships ? model.relationships.length : null;
+  const viewCount = model.views ? model.views.length : null;
   const all = checkC4Consistency(model, graph, opts.policy);
 
   if (opts.establishBaseline) {
@@ -55,6 +60,8 @@ export async function validateC4(
       counts: { high: 0, medium: 0, low: 0 },
       elementCount: model.elements.length,
       entityCount,
+      relationshipCount,
+      viewCount,
       baselineEstablished: keys.length,
     };
   }
@@ -72,5 +79,5 @@ export async function validateC4(
 
   const counts = { high: 0, medium: 0, low: 0 };
   for (const f of findings) counts[f.severity] += 1;
-  return { findings, counts, elementCount: model.elements.length, entityCount };
+  return { findings, counts, elementCount: model.elements.length, entityCount, relationshipCount, viewCount };
 }
