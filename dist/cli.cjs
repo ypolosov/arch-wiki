@@ -11167,6 +11167,32 @@ function checkC4Consistency(model, g, policy) {
   return sortFindings(findings.filter((f) => !ignore.has(f.rule)));
 }
 
+// src/domain/services/C4ViewRefs.ts
+var REF_RE = /^(?:deployment\s+)?view\s+([A-Za-z_][A-Za-z0-9_]*)$/i;
+function parseViewRefs(markdown) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of markdown.matchAll(/`([^`\n]+)`/g)) {
+    const hit = m[1].trim().match(REF_RE);
+    if (hit) out.add(hit[1]);
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
+function c4ViewMissingFindings(hubs, viewIds) {
+  const out = [];
+  for (const hub of hubs) {
+    for (const ref of hub.refs) {
+      if (viewIds.has(ref)) continue;
+      out.push({
+        rule: "c4-view-missing",
+        severity: "medium",
+        file: hub.file,
+        message: `arc42 hub ${hub.basename} shows \`view ${ref}\` but the C4 model defines no such view`
+      });
+    }
+  }
+  return out;
+}
+
 // src/application/usecases/ValidateC4.ts
 var C4_BASELINE_FILE = ".arch-wiki/c4-baseline.json";
 async function validateC4(model, repo, opts) {
@@ -11174,7 +11200,22 @@ async function validateC4(model, repo, opts) {
   const entityCount = pagesOfKind(graph, ["entity"]).length;
   const relationshipCount = model.relationships ? model.relationships.length : null;
   const viewCount = model.views ? model.views.length : null;
-  const all = checkC4Consistency(model, graph, opts.policy);
+  let viewFindings = [];
+  if (model.views) {
+    const hubs = pagesOfKind(graph, ["arc42"]).filter((p) => {
+      const tags = p.frontmatter.tags;
+      return Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === "c4");
+    });
+    const hubRefs = await Promise.all(
+      hubs.map(async (p) => ({
+        file: p.relPath,
+        basename: p.basename,
+        refs: parseViewRefs(await repo.read(p.relPath))
+      }))
+    );
+    viewFindings = c4ViewMissingFindings(hubRefs, new Set(model.views.map((v) => v.id)));
+  }
+  const all = sortFindings([...checkC4Consistency(model, graph, opts.policy), ...viewFindings]);
   if (opts.establishBaseline) {
     const keys = [...new Set(all.map(baselineKey))].sort();
     await repo.write(C4_BASELINE_FILE, `${JSON.stringify(keys, null, 2)}
@@ -11386,6 +11427,92 @@ async function updateUtilityTree(input, deps) {
     changed: r.changed,
     ranked: rankUtilityTree(parseUtilityTable(r.content))
   };
+}
+
+// src/domain/services/C4Scaffold.ts
+var ID_RE2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var FQN_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+function quote(s) {
+  const t = s.trim();
+  if (!t) throw new DomainError("c4 label must not be empty", 1);
+  if (!t.includes("'")) return `'${t}'`;
+  if (!t.includes('"')) return `"${t}"`;
+  throw new DomainError(`c4 label contains both ' and " and cannot be quoted: ${t}`, 1);
+}
+function assertId(value, flag, hint) {
+  if (!ID_RE2.test(value)) throw new DomainError(`${flag} must be a DSL identifier (${hint}), got "${value}"`, 1);
+}
+function assertFqn(value, flag) {
+  if (!FQN_RE.test(value)) {
+    throw new DomainError(`${flag} must be a fully-qualified element id (e.g. product.gaming), got "${value}"`, 1);
+  }
+}
+function renderC4Element(s) {
+  assertFqn(s.parent, "--parent");
+  assertId(s.id, "--id", "letters/digits/underscore, not starting with a digit");
+  assertId(s.kind, "--kind", "a kind declared in specification.c4");
+  const body = [];
+  for (const raw of s.tags ?? []) {
+    const tag = raw.replace(/^#/, "");
+    assertId(tag, "--tags", "a tag declared in specification.c4");
+    body.push(`      #${tag}`);
+  }
+  if (s.technology) body.push(`      technology ${quote(s.technology)}`);
+  const inner = body.length ? ` {
+${body.join("\n")}
+    }` : "";
+  return [
+    "// Scaffolded by `arch-wiki scaffold-c4-element` \u2014 edit freely, this file is yours.",
+    "// ADDITIVE: `extend` adds to the model from a separate file; the hand-authored sources are",
+    "// untouched. The kind must be declared in specification.c4. Run `npm run validate` after editing.",
+    "model {",
+    `  extend ${s.parent} {`,
+    `    ${s.id} = ${s.kind} ${quote(s.title)}${inner}`,
+    "  }",
+    "}",
+    ""
+  ].join("\n");
+}
+function renderC4View(s) {
+  assertId(s.id, "--id", "letters/digits/underscore, not starting with a digit");
+  if (s.of) assertFqn(s.of, "--of");
+  const lines = ["views {", `  view ${s.id}${s.of ? ` of ${s.of}` : ""} {`];
+  if (s.title) lines.push(`    title ${quote(s.title)}`);
+  lines.push("    include *", "  }", "}");
+  return [
+    "// Scaffolded by `arch-wiki scaffold-c4-view` \u2014 edit the predicates, this file is yours.",
+    "// ADDITIVE: a NEW view in its own file; existing views and their curated layouts are untouched.",
+    "// Narrow it with predicates, e.g. `exclude element.tag = #planned` for an as-built projection.",
+    "// Show it from the matching arc42 hub as `view " + s.id + "` so `validate-c4` can check the link.",
+    ...lines,
+    ""
+  ].join("\n");
+}
+
+// src/application/usecases/ScaffoldC4.ts
+function c4Dir(config) {
+  try {
+    return config.c4().dir.replace(/\/+$/, "");
+  } catch {
+    throw new DomainError(
+      'scaffold-c4-* needs a [c4] config so Core knows where your LikeC4 sources live \u2014 add {"c4":{"dir":"c4/src","validate":"npm run validate"}} to docs/architecture/.arch-wiki/config.json',
+      2
+    );
+  }
+}
+async function scaffoldC4Element(spec, deps) {
+  const content = renderC4Element(spec);
+  const path9 = `${c4Dir(deps.config)}/${spec.parent}.${spec.id}.c4`;
+  if (await deps.repo.exists(path9)) return { path: path9, created: false, content };
+  await deps.repo.write(path9, content);
+  return { path: path9, created: true, content };
+}
+async function scaffoldC4View(spec, deps) {
+  const content = renderC4View(spec);
+  const path9 = `${c4Dir(deps.config)}/view-${spec.id}.c4`;
+  if (await deps.repo.exists(path9)) return { path: path9, created: false, content };
+  await deps.repo.write(path9, content);
+  return { path: path9, created: true, content };
 }
 
 // src/domain/services/ManagedRegion.ts
@@ -11872,7 +11999,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.24.0";
+var PLUGIN_VERSION = "0.25.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -12550,6 +12677,45 @@ async function main() {
       emit({ ok: true, command: "update-kanban", data: result });
     } catch (err) {
       fail("update-kanban", err);
+    }
+  });
+  cli.command("scaffold-c4-element", "scaffold ONE C4 element as an additive `extend` file (never edits model.c4)").option("--parent <fqn>", "fully-qualified parent element id to extend, e.g. product.gaming").option("--id <id>", "local id of the new element, e.g. payments").option("--kind <kind>", "element kind declared in specification.c4, e.g. container").option("--title <text>", "display title").option("--tech <text>", "technology label (optional)").option("--tags <list>", "comma-separated tags without # (optional), e.g. planned").action(async (opts) => {
+    try {
+      for (const flag of ["parent", "id", "kind", "title"]) {
+        if (!opts[flag]) throw new DomainError(`missing --${flag}`, 1);
+      }
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await scaffoldC4Element(
+        {
+          parent: String(opts.parent),
+          id: String(opts.id),
+          kind: String(opts.kind),
+          title: String(opts.title),
+          technology: opts.tech != null ? String(opts.tech) : void 0,
+          tags: opts.tags != null ? String(opts.tags).split(",").map((t) => t.trim()).filter(Boolean) : void 0
+        },
+        { repo, config: await loadProjectConfig(opts) }
+      );
+      emit({ ok: true, command: "scaffold-c4-element", data: result });
+    } catch (err) {
+      fail("scaffold-c4-element", err);
+    }
+  });
+  cli.command("scaffold-c4-view", "scaffold ONE C4 view as an additive file (never touches existing views/layouts)").option("--id <id>", "view id, referenced from the arc42 hub as `view <id>`").option("--title <text>", "view title (optional)").option("--of <fqn>", "scope the view to an element (view <id> of <fqn>) (optional)").action(async (opts) => {
+    try {
+      if (!opts.id) throw new DomainError("missing --id", 1);
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await scaffoldC4View(
+        {
+          id: String(opts.id),
+          title: opts.title != null ? String(opts.title) : void 0,
+          of: opts.of != null ? String(opts.of) : void 0
+        },
+        { repo, config: await loadProjectConfig(opts) }
+      );
+      emit({ ok: true, command: "scaffold-c4-view", data: result });
+    } catch (err) {
+      fail("scaffold-c4-view", err);
     }
   });
   cli.command("update-utility-tree", "idempotently upsert a QAW row into utility-tree.md").option("--from <id>", "quality-attribute driver id (keyed; placeholder if absent)").option("--scenario <text>", "quality scenario one-liner").option("--priority <text>", "priority marker (e.g. H/M/L)").action(async (opts) => {

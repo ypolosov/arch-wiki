@@ -192,6 +192,18 @@ Audit and report (then propose fixes / append to `risks.md`):
   integrity, FPF E.17.2) and `c4-element-in-no-view` (a documented-kind element drawn in no view —
   FPF C.30.ASV). Both are **skip-safely**: absent from a summary-only model, they never fire (never
   invented) — low severity, baseline/ignore-suppressible.
+- arc42 ⟷ view correspondence (`c4-view-missing`, medium): a `c4`-tagged arc42 hub shows `` `view X` ``
+  / `` `deployment view X` `` but the model defines no view `X` — a dangling promise (renamed/dropped
+  view). Only those keyword forms count as references; a bare backticked id is not read as one. Also
+  skip-safely (no views in the model ⇒ not checked). Scaffold the missing view with
+  `arch-wiki scaffold-c4-view --id X`.
+
+**Scaffolding C4 (v0.25).** `arch-wiki scaffold-c4-element` / `scaffold-c4-view` write ONE **new,
+additive** `.c4` file each (`model { extend <fqn> { … } }` / `views { view <id> { … } }`) under
+`c4.dir`. Core supplies the DSL syntax; **you** supply the semantics (parent/kind/title) — it never
+infers structure from prose and never edits your hand-authored sources or their curated layouts.
+Idempotent (an existing file is never overwritten); needs a `[c4]` config or exits 2. LikeC4 —
+not Core — validates the model: run `npm run validate` after.
 - arc42 view-hub correspondence (`view-hub-uncorresponded`, low, FPF E.17.0/C.34): an arc42 hub
   tagged `c4` (a **viewpoint binding**) that shows no C4 view — no `## C4 …` section. The `c4` tag is
   the viewpoint↔view correspondence marker; a bound hub must actually present its view.

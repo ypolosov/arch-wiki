@@ -72,4 +72,39 @@ describe('validateC4 (integration)', () => {
     const report = await validateC4(MODEL, repo, { policy: POLICY, severity: 'high' });
     expect(report.findings).toEqual([]); // the only finding is medium
   });
+
+  describe('arc42 ⟷ view correspondence gate', () => {
+    async function rootWithHub(hubBody: string): Promise<string> {
+      const root = await tmpRoot();
+      await new NodeFileSystem().writeFile(
+        path.join(root, 'arc42/05-building-block-view.md'),
+        `---\ntype: arc42\ntags:\n  - arc42\n  - c4\n---\n\n# arc42 §5\n\n${hubBody}\n`,
+      );
+      return root;
+    }
+
+    it('flags a hub showing a view the model does not define', async () => {
+      const repo = repoOf(await rootWithHub('- Containers: `view ghost`'));
+      const model: C4Model = { elements: [], views: [{ id: 'containers', title: 'C', elementIds: [] }] };
+      const report = await validateC4(model, repo, { policy: { ...POLICY, requireDocumentation: [] } });
+      const missing = report.findings.filter((f) => f.rule === 'c4-view-missing');
+      expect(missing).toHaveLength(1);
+      expect(missing[0]!.message).toContain('ghost');
+      expect(missing[0]!.file).toBe('arc42/05-building-block-view.md');
+    });
+
+    it('is silent when the promised view resolves', async () => {
+      const repo = repoOf(await rootWithHub('- Containers: `view containers`'));
+      const model: C4Model = { elements: [], views: [{ id: 'containers', title: 'C', elementIds: [] }] };
+      const report = await validateC4(model, repo, { policy: { ...POLICY, requireDocumentation: [] } });
+      expect(report.findings.filter((f) => f.rule === 'c4-view-missing')).toEqual([]);
+    });
+
+    it('skips entirely when the model carries no views (skip-safely)', async () => {
+      const repo = repoOf(await rootWithHub('- Containers: `view ghost`'));
+      const report = await validateC4({ elements: [] }, repo, { policy: { ...POLICY, requireDocumentation: [] } });
+      expect(report.findings.filter((f) => f.rule === 'c4-view-missing')).toEqual([]);
+      expect(report.viewCount).toBeNull();
+    });
+  });
 });

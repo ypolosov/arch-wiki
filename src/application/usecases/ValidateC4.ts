@@ -4,12 +4,14 @@ import {
   Severity,
   SEVERITY_RANK,
   baselineKey,
+  sortFindings,
 } from '../../domain/services/LintRuleSet';
 import {
   checkC4Consistency,
   C4Model,
   C4ConsistencyPolicy,
 } from '../../domain/services/C4Consistency';
+import { c4ViewMissingFindings, HubViewRefs, parseViewRefs } from '../../domain/services/C4ViewRefs';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
 
 export interface ValidateC4Options {
@@ -50,7 +52,25 @@ export async function validateC4(
   const entityCount = pagesOfKind(graph, ['entity']).length;
   const relationshipCount = model.relationships ? model.relationships.length : null;
   const viewCount = model.views ? model.views.length : null;
-  const all = checkC4Consistency(model, graph, opts.policy);
+
+  // arc42 ⟷ view correspondence: a `c4`-tagged hub must show views the model actually defines.
+  // Only when the model carries views (skip-safely — a summary-only model never triggers it).
+  let viewFindings: LintFinding[] = [];
+  if (model.views) {
+    const hubs = pagesOfKind(graph, ['arc42']).filter((p) => {
+      const tags = (p.frontmatter as { tags?: unknown }).tags;
+      return Array.isArray(tags) && tags.map(String).some((t) => t.toLowerCase() === 'c4');
+    });
+    const hubRefs: HubViewRefs[] = await Promise.all(
+      hubs.map(async (p) => ({
+        file: p.relPath,
+        basename: p.basename,
+        refs: parseViewRefs(await repo.read(p.relPath)),
+      })),
+    );
+    viewFindings = c4ViewMissingFindings(hubRefs, new Set(model.views.map((v) => v.id)));
+  }
+  const all = sortFindings([...checkC4Consistency(model, graph, opts.policy), ...viewFindings]);
 
   if (opts.establishBaseline) {
     const keys = [...new Set(all.map(baselineKey))].sort();

@@ -36,6 +36,7 @@ import { normalizeC4ModelJson, parseC4Sources } from '../adapters/c4/LikeC4Model
 import { recordRisk } from '../application/usecases/RecordRisk';
 import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
 import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
+import { scaffoldC4Element, scaffoldC4View } from '../application/usecases/ScaffoldC4';
 import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
 import { reportDriverAssurance } from '../application/usecases/DriverAssurance';
 import { updateEpistemicDebt } from '../application/usecases/UpdateEpistemicDebt';
@@ -959,6 +960,60 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'update-kanban', data: result });
       } catch (err) {
         fail('update-kanban', err);
+      }
+    });
+
+  cli
+    .command('scaffold-c4-element', 'scaffold ONE C4 element as an additive `extend` file (never edits model.c4)')
+    .option('--parent <fqn>', 'fully-qualified parent element id to extend, e.g. product.gaming')
+    .option('--id <id>', 'local id of the new element, e.g. payments')
+    .option('--kind <kind>', 'element kind declared in specification.c4, e.g. container')
+    .option('--title <text>', 'display title')
+    .option('--tech <text>', 'technology label (optional)')
+    .option('--tags <list>', 'comma-separated tags without # (optional), e.g. planned')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        for (const flag of ['parent', 'id', 'kind', 'title'] as const) {
+          if (!opts[flag]) throw new DomainError(`missing --${flag}`, 1);
+        }
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await scaffoldC4Element(
+          {
+            parent: String(opts.parent),
+            id: String(opts.id),
+            kind: String(opts.kind),
+            title: String(opts.title),
+            technology: opts.tech != null ? String(opts.tech) : undefined,
+            tags: opts.tags != null ? String(opts.tags).split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+          },
+          { repo, config: await loadProjectConfig(opts) },
+        );
+        emit({ ok: true, command: 'scaffold-c4-element', data: result });
+      } catch (err) {
+        fail('scaffold-c4-element', err);
+      }
+    });
+
+  cli
+    .command('scaffold-c4-view', 'scaffold ONE C4 view as an additive file (never touches existing views/layouts)')
+    .option('--id <id>', 'view id, referenced from the arc42 hub as `view <id>`')
+    .option('--title <text>', 'view title (optional)')
+    .option('--of <fqn>', 'scope the view to an element (view <id> of <fqn>) (optional)')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        if (!opts.id) throw new DomainError('missing --id', 1);
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await scaffoldC4View(
+          {
+            id: String(opts.id),
+            title: opts.title != null ? String(opts.title) : undefined,
+            of: opts.of != null ? String(opts.of) : undefined,
+          },
+          { repo, config: await loadProjectConfig(opts) },
+        );
+        emit({ ok: true, command: 'scaffold-c4-view', data: result });
+      } catch (err) {
+        fail('scaffold-c4-view', err);
       }
     });
 

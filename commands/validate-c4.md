@@ -27,6 +27,11 @@ the findings. LikeC4 stays hand-authored; this never edits `*.c4`.
    also narrate `c4-relationship-dangling` (an edge endpoint naming no element — a broken model)
    and `c4-element-in-no-view` (a documented-kind element drawn in no view). Both are **skip-safely**:
    a summary-only model (no relations/views) never triggers them.
+   **arc42 ⟷ view correspondence:** `c4-view-missing` — a `c4`-tagged arc42 hub shows `` `view X` ``
+   (or `` `deployment view X` ``) but the model defines no view `X`: a broken promise, usually a renamed
+   or dropped view. Only those two keyword forms are checked; a bare backticked id is NOT read as a
+   reference (every code span would match). Fix by correcting the hub, or scaffold the view:
+   `arch-wiki scaffold-c4-view --id X` (additive; never touches existing views or their layouts).
 4. **Adoption:** on a legacy model/wiki, first run `arch-wiki validate-c4 --establish-baseline`
    (with the model on stdin) to record current mismatches as known; afterwards only new
    drift is reported.
