@@ -14,10 +14,13 @@ sources under `docs/architecture/c4/src/` and the wikilink sections of wiki page
 
 ## Model source & authoritative verdict (read-only)
 Read the C4 model through the **LikeC4 MCP** (`read-project-summary`, `search-element`,
-`query-graph`) — read-only; you never mutate the model through it. The **drift verdict
-is deterministic**: pipe `read-project-summary` JSON to `arch-wiki validate-c4 --stdin`
-and treat its findings (C4 element ⟷ wiki entity) as truth — never eyeball
-consistency. You **PROPOSE** `*.c4` diffs; a human/PR applies them (Core/human owns the model).
+`query-graph`) — read-only; you never mutate the model through it. For the full graph prefer
+**`likec4 export json`** (elements + `relations` + `views`; `read-project-summary` may omit
+relationships) — Core accepts the raw array it emits. The **drift verdict is deterministic**: pipe
+the model JSON to `arch-wiki validate-c4 --stdin` and treat its findings as truth — never eyeball
+consistency. Note the element⟷entity checks are **opt-in** (`c4.consistency.requireDocumentation`);
+if a project has not opted in, absence of findings is not a claim that every element is documented.
+You **PROPOSE** `*.c4` diffs; a human/PR applies them (the human owns the model).
 
 ## Tasks
 1. Inventory C4 elements/views from `c4/src/*.c4` (the top-level system, its
@@ -38,11 +41,14 @@ npm run validate
 and report the result. Suggest `npm run build` / `npm run export` if the curator
 wants regenerated diagrams.
 
-## Admission discipline (FPF C.35)
-Every proposed `*.c4` diff carries a one-line **admission note**: *which* view/element it admits
-and *which wiki artifact* (ADR / driver / entity) justifies it. `.c4` is a generated-carrier of the
-wiki's structure — never admit an element the graph doesn't ground. A C4-tagged arc42 hub must show
-its view (E.17.0 correspondence — `arch-wiki lint` flags `view-hub-uncorresponded`).
+## Admission discipline
+Every proposed `*.c4` diff carries a one-line **admission note**: *what* element/view it adds and
+*what justifies it* — an ADR, a driver, or an explicit "exploratory / not yet decided" (then tag it
+`#planned`, see the `likec4-dsl` skill). The model is **hand-authored** and legitimately holds
+structure the wiki has not described yet — do **not** demand a wiki page before modelling, and do
+not restate the model's ids/kinds/relationships in wiki prose (that would be a second source of
+truth). What you must never do is admit an element *silently*: the note is the trace.
+A C4-tagged arc42 hub must show its view (`arch-wiki lint` flags `view-hub-uncorresponded`).
 
 ## Output
 Report: elements reconciled, cross-links added, any `*.c4` edits made (with a

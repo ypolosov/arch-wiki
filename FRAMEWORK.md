@@ -34,8 +34,16 @@ does not restate or fork FPF.
 
 ## Guard-rails carried (FPF E.5)
 
-- **GR-2 · Notational Independence (E.5.2).** Wiki entities are the semantic canon; C4/LikeC4
-  is one notation of them. `arch-wiki validate-c4` reconciles drift deterministically.
+- **GR-2 · ~~Notational Independence (E.5.2): wiki entities are the semantic canon; C4/LikeC4 is one
+  notation of them.~~ RETRACTED in v0.23.0 — this was fabricated grounding.** The claim did not come
+  from any of the four methodologies arch-wiki composes (arc42 + ADD 3.0 + MADR + C4/LikeC4): none of
+  them says "entity" (ADD says *element*, arc42 says *Building Block View §5*, C4 says *element*), and
+  `c4/src/*.c4` is **hand-authored**, not derived from the wiki — so it is not "one notation of" the
+  entities. What is true: the C4 **model** holds the structure (ids, kinds, relationships) and is the
+  source of truth for it; **arc42 §5** describes what a block is *for* (responsibility, interfaces);
+  C4 **views** are the projections. `validate-c4` reports drift, and the element⟷entity direction is
+  **opt-in** (`c4.consistency.requireDocumentation`). See [[arch-wiki-original-scope]] for the rule
+  this violated: name the source methodology before canonizing anything.
 - **GR-3 · Unidirectional Dependency (E.5.3).** arch-wiki imports FPF; FPF never imports
   arch-wiki. *Note:* page-level `driver → ADR` traceability direction is grounded in `C.2.P`
   / `C.32.PAD` (a decision cites its drivers), **not** GR-3 — GR-3 governs framework-family

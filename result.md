@@ -281,9 +281,21 @@ Correct direction (untouched, still encouraged):
 
 Приоритет: P1 · Трудоёмкость: S · Риск: низкий — additive, config-gated, warn-tier, off по умолчанию; mirror-пайплайн не затрагивается (lint не рендерит Confluence). Может вскрыть реальные findings на существующих gt-графах — это и есть цель; config-gate даёт target-репо включиться, когда готово.
 
-### 4. Notational Independence (GR-2) как явный schema-инвариант: entities — семантический канон, C4 — одна нотация
+### 4. ~~Notational Independence (GR-2) как явный schema-инвариант: entities — семантический канон, C4 — одна нотация~~ — ❌ ОТОЗВАНО в v0.23.0
 
-**FPF-основание.** E.5.2 (GR-2, Notational Independence) требует, чтобы семантика определялась независимо от любой одной нотации. arch-wiki уже реализует триаду Viewpoint/View/Correspondence: `entities/` несёт семантику, C4 — нотация, `validate-c4` — correspondence-проверка. **Адверсариальная находка:** механическая часть уже есть — `checkC4Consistency` (`src/domain/services/C4Consistency.ts:106`) уже эмитит `c4-element-without-wiki-entity` (Direction 1), gated по `policy.requireDocumentation` + `.arch-wiki/c4-baseline.json`. Значит новый drift-класс НЕ нужен; пробел — чисто доктринальный: schema нигде не называет инвариант, а `likec4-dsl` skill называет C4 «source of truth», что читается как notation-primacy и противоречит entities-as-canon.
+> **RETRACTED. Это предложение было ошибкой — фабрикация обоснования.** Оно не выводится ни из
+> одной из четырёх методологий, которые композирует arch-wiki (arc42 + ADD 3.0 + MADR + C4/LikeC4):
+> слова «entity» нет ни в одной (ADD говорит *element*, arc42 — *Building Block View §5*, C4 —
+> *element*). И фактически: `c4/src/*.c4` **пишется руками** и держит 211 элементов + 135 связей,
+> которых в вики нет вообще, — значит он не «одна из нотаций entities», а первичный носитель
+> структуры. Хуже: пункт ниже объявляет «противоречием» то, что изначальный `likec4-dsl` skill
+> называл C4 «source of truth», — **изначальный скилл был прав, а это предложение его перевернуло**.
+> Реализовано в wave 1 (`c8be433`), отозвано в v0.23.0 (`schema/CLAUDE.md`, `FRAMEWORK.md`,
+> `skills/likec4-dsl`, `agents/architecture-cartographer`); `requireDocumentation` стал opt-in,
+> шаблон entity переведён на arc42 §5. Правило на будущее: назови методологию-источник и её
+> собственное слово, прежде чем что-то канонизировать.
+
+**FPF-основание (исходный, ошибочный текст — сохранён как запись).** E.5.2 (GR-2, Notational Independence) требует, чтобы семантика определялась независимо от любой одной нотации. arch-wiki уже реализует триаду Viewpoint/View/Correspondence: `entities/` несёт семантику, C4 — нотация, `validate-c4` — correspondence-проверка. **Адверсариальная находка:** механическая часть уже есть — `checkC4Consistency` (`src/domain/services/C4Consistency.ts:106`) уже эмитит `c4-element-without-wiki-entity` (Direction 1), gated по `policy.requireDocumentation` + `.arch-wiki/c4-baseline.json`. Значит новый drift-класс НЕ нужен; пробел — чисто доктринальный: schema нигде не называет инвариант, а `likec4-dsl` skill называет C4 «source of truth», что читается как notation-primacy и противоречит entities-as-canon.
 
 **Что менять.** (a) Добавить в `schema/CLAUDE.md` (секция Invariants) строку GR-2. (b) Переформулировать `skills/likec4-dsl/SKILL.md`: «source of truth» скоупить к ДИАГРАММЕ, не к архитектурному смыслу. (c) *Опционально:* обогатить message существующего `c4-element-without-wiki-entity`, процитировав GR-2 — новую логику не добавлять.
 
