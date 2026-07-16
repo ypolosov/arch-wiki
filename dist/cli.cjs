@@ -8920,14 +8920,19 @@ var ProjectConfig = class _ProjectConfig {
   }
   /**
    * OPTIONAL+default. The C4↔wiki consistency policy for `validate-c4`. Never
-   * throws — validate-c4 works with sensible defaults even without a [c4] block
-   * (the model arrives via --model-json, not from c4().dir). Default keeps the
-   * check low-noise: only `system`+`container` elements must be documented.
+   * throws — validate-c4 works even without a [c4] block (the model arrives via
+   * --model-json, not from c4().dir).
+   *
+   * `requireDocumentation` is **OPT-IN** (default `[]`): the C4 model is the notation of the
+   * structure and arc42 §5 describes the blocks — demanding a wiki page per model element is a
+   * project's choice, not this plugin's opinion. Set it explicitly (e.g. `["system"]`) to enable
+   * the `c4-element-without-wiki-entity` / `c4-element-in-no-view` checks. The reverse direction
+   * (`wiki-entity-without-c4-element`) is unaffected and still runs.
    */
   c4Consistency() {
     const c = this.cfg.c4?.consistency;
     return {
-      requireDocumentation: c?.requireDocumentation ?? ["system", "container"],
+      requireDocumentation: c?.requireDocumentation ?? [],
       severity: c?.severity ?? "medium",
       ignore: c?.ignore ?? []
     };
@@ -11207,6 +11212,14 @@ function lastSegment2(id) {
 function asRecord(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : null;
 }
+function pickModelRoot(raw) {
+  if (!Array.isArray(raw)) return asRecord(raw);
+  for (const entry of raw) {
+    const r = asRecord(entry);
+    if (r && (r.elements !== void 0 || r.model !== void 0 || r.project !== void 0)) return r;
+  }
+  return null;
+}
 function pickKeyed(root, key) {
   if (root[key] !== void 0) return root[key];
   const model = asRecord(root.model);
@@ -11277,7 +11290,7 @@ function toElement(raw, key) {
   return { id, kind: String(raw.kind ?? ""), title, tags };
 }
 function normalizeC4ModelJson(raw) {
-  const root = asRecord(raw);
+  const root = pickModelRoot(raw);
   if (!root) return { elements: [] };
   const elements = [];
   for (const [key, rec] of eachEntry(pickKeyed(root, "elements"))) {
@@ -11859,7 +11872,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.22.0";
+var PLUGIN_VERSION = "0.23.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";

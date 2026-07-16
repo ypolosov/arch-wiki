@@ -1,2 +1,2 @@
 /** Plugin artifact version (semver). Keep in sync with plugin.json/package.json. */
-export const PLUGIN_VERSION = '0.22.0';
+export const PLUGIN_VERSION = '0.23.0';

@@ -18,6 +18,22 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+/**
+ * `likec4 export json` emits an **array** of project models (one entry per project/stage — a
+ * single-project export still yields an array). Unwrap it to the first entry that actually carries
+ * a model, so piping the CLI output straight into `validate-c4 --stdin` works. Without this Core
+ * silently saw an EMPTY model and reported every wiki entity as undocumented — a wrong verdict from
+ * a well-formed input. A plain object (the MCP `read-project-summary` shape) passes through.
+ */
+function pickModelRoot(raw: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(raw)) return asRecord(raw);
+  for (const entry of raw) {
+    const r = asRecord(entry);
+    if (r && (r.elements !== undefined || r.model !== undefined || r.project !== undefined)) return r;
+  }
+  return null;
+}
+
 /** Find a keyed container (`elements`/`relations`/`views`) at the root or one nesting level down. */
 function pickKeyed(root: Record<string, unknown>, key: string): unknown {
   if (root[key] !== undefined) return root[key];
@@ -101,7 +117,7 @@ function toElement(raw: Record<string, unknown>, key: string | undefined): C4Ele
 }
 
 export function normalizeC4ModelJson(raw: unknown): C4Model {
-  const root = asRecord(raw);
+  const root = pickModelRoot(raw);
   if (!root) return { elements: [] };
   const elements: C4Element[] = [];
   for (const [key, rec] of eachEntry(pickKeyed(root, 'elements'))) {

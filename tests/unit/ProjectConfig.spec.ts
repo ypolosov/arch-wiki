@@ -62,6 +62,18 @@ describe('ProjectConfig (pure)', () => {
     expect(c.c4().validate).toBe('npm run validate');
   });
 
+  it('c4Consistency().requireDocumentation is OPT-IN — empty unless the project sets it', () => {
+    // The C4 model is the structure's notation and arc42 §5 describes the blocks; demanding a wiki
+    // page per model element is a project's choice, not this plugin's default opinion.
+    expect(ProjectConfig.from(null).c4Consistency().requireDocumentation).toEqual([]);
+    expect(cfg({ c4: { dir: 'c4', validate: 'x' } }).c4Consistency().requireDocumentation).toEqual([]);
+    // …and it is honored when set explicitly
+    expect(
+      cfg({ c4: { dir: 'c4', validate: 'x', consistency: { requireDocumentation: ['system'] } } })
+        .c4Consistency().requireDocumentation,
+    ).toEqual(['system']);
+  });
+
   it('confluenceSiteUrl(): null when absent; trailing slash trimmed when set', () => {
     expect(ProjectConfig.from(null).confluenceSiteUrl()).toBeNull();
     expect(cfg({ integrations: { confluence: { space: 'PP' } } }).confluenceSiteUrl()).toBeNull();

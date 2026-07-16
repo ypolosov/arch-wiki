@@ -97,4 +97,27 @@ describe('normalizeC4ModelJson — relationships & views (likec4 export json)', 
     expect(m.relationships).toBeUndefined();
     expect(m.views).toBeUndefined();
   });
+
+  it('unwraps the top-level ARRAY that `likec4 export json` emits', () => {
+    // The real CLI emits [{_stage,projectId,elements,relations,views}, …]. Piping it raw used to
+    // yield an EMPTY model → every wiki entity falsely reported as undocumented.
+    const m = normalizeC4ModelJson([
+      {
+        _stage: 'layouted',
+        projectId: 'gt',
+        elements: { a: { id: 'a', kind: 'system' } },
+        relations: { r: { id: 'r', source: { model: 'a' }, target: { model: 'a' }, title: 'self' } },
+        views: { v: { id: 'v', title: 'V', nodes: [{ id: 'n', modelRef: 'a' }] } },
+      },
+    ]);
+    expect(m.elements).toHaveLength(1);
+    expect(m.relationships).toHaveLength(1);
+    expect(m.views).toHaveLength(1);
+  });
+
+  it('skips array entries that carry no model, and stays empty for a garbage array', () => {
+    expect(normalizeC4ModelJson([{ junk: 1 }, { elements: [{ id: 'a', kind: 'system' }] }]).elements).toHaveLength(1);
+    expect(normalizeC4ModelJson([]).elements).toEqual([]);
+    expect(normalizeC4ModelJson([1, 'x']).elements).toEqual([]);
+  });
 });

@@ -257,27 +257,38 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     expect(JSON.parse(stderr.trim()).ok).toBe(false);
   });
 
-  it('validate-c4 consumes model-JSON via stdin: clean passes, drift exits 2', async () => {
+  it('validate-c4 via stdin: requireDocumentation is opt-in; once configured, drift exits 2', async () => {
     const wiki = path.join(root, 'docs/architecture');
     await fs.mkdir(path.join(wiki, 'entities'), { recursive: true });
     await fs.writeFile(path.join(wiki, 'entities/backend.md'), '---\ntype: entity\n---\n# Backend\n');
 
-    const clean = JSON.stringify({ elements: [{ id: 'cloud.backend', kind: 'container', title: 'Backend' }] });
-    const okOut = execFileSync('node', [CLI, 'validate-c4', '--stdin', '--cwd', root], {
-      cwd: root,
-      encoding: 'utf8',
-      input: clean,
-    });
-    const okEnv = JSON.parse(okOut.trim().split('\n').pop()!) as Envelope;
-    expect(okEnv.ok).toBe(true);
-    expect((okEnv.data.findings as unknown[]).length).toBe(0);
-
+    // `cloud.db` has no wiki entity; `cloud.backend` matches entities/backend.md by name.
     const drift = JSON.stringify({
       elements: [
         { id: 'cloud.backend', kind: 'container', title: 'Backend' },
         { id: 'cloud.db', kind: 'container', title: 'Database' },
       ],
     });
+
+    // 1. No [c4.consistency] → requireDocumentation is OPT-IN (default []): the plugin does NOT
+    //    demand a wiki page per model element, so the undocumented container is not reported.
+    const optOut = execFileSync('node', [CLI, 'validate-c4', '--stdin', '--cwd', root], {
+      cwd: root,
+      encoding: 'utf8',
+      input: drift,
+    });
+    const optOutEnv = JSON.parse(optOut.trim().split('\n').pop()!) as Envelope;
+    expect(optOutEnv.ok).toBe(true);
+    expect((optOutEnv.data.findings as unknown[]).length).toBe(0);
+
+    // 2. The project opts in explicitly → the same model now reports the undocumented container.
+    await fs.mkdir(path.join(wiki, '.arch-wiki'), { recursive: true });
+    await fs.writeFile(
+      path.join(wiki, '.arch-wiki/config.json'),
+      JSON.stringify({
+        c4: { dir: 'c4/src', validate: 'true', consistency: { requireDocumentation: ['container'] } },
+      }),
+    );
     let exitCode = 0;
     let stdout = '';
     try {
@@ -295,6 +306,31 @@ describe('arch-wiki CLI (e2e, built bundle)', () => {
     const env = JSON.parse(stdout.trim().split('\n').pop()!) as Envelope;
     const findings = env.data.findings as Array<{ rule: string; message: string }>;
     expect(findings.some((f) => f.rule === 'c4-element-without-wiki-entity' && f.message.includes('cloud.db'))).toBe(true);
+  });
+
+  it('validate-c4 accepts the raw `likec4 export json` ARRAY piped straight in', async () => {
+    const wiki = path.join(root, 'docs/architecture');
+    await fs.mkdir(wiki, { recursive: true });
+    // The real CLI emits an array of project models; piping it raw used to yield an EMPTY model.
+    const raw = JSON.stringify([
+      {
+        _stage: 'layouted',
+        projectId: 'demo',
+        elements: { 'cloud.backend': { id: 'cloud.backend', kind: 'container', title: 'Backend' } },
+        relations: { r1: { id: 'r1', source: { model: 'cloud.backend' }, target: { model: 'cloud.backend' }, title: 'self' } },
+        views: { index: { id: 'index', title: 'Index', nodes: [{ id: 'n', modelRef: 'cloud.backend' }] } },
+      },
+    ]);
+    const out = execFileSync('node', [CLI, 'validate-c4', '--stdin', '--cwd', root], {
+      cwd: root,
+      encoding: 'utf8',
+      input: raw,
+    });
+    const env = JSON.parse(out.trim().split('\n').pop()!) as Envelope;
+    expect(env.ok).toBe(true);
+    expect(env.data.elementCount).toBe(1);
+    expect(env.data.relationshipCount).toBe(1);
+    expect(env.data.viewCount).toBe(1);
   });
 
   it('validate-c4 --source regex without a [c4] config exits 2 with a self-explanatory hint', async () => {

@@ -50,14 +50,17 @@ and *a backlog card is not performed work* (a plan ≠ what happened).
 | **`ITER-NN`** iteration log | `U.Work` (A.15.1) | a *dated enactment* of ADD — what actually happened. Not proof the design is "done". |
 | a **`kanban.md` card** / iteration goal | `U.WorkPlan` (A.15.2) | *intended* work. A card is not performed work. |
 | **arc42** | publication / access carrier | the 12 hubs in `arc42/` *expose* artifacts (see table below); they do no work and are not a method. |
-| **C4 / LikeC4** | notation / View (E.5.2, GR-2) | the *visual notation* of the structures; hand-authored in `c4/src/*.c4`. The wiki **entities** are the semantic canon — `.c4` is one notation of them, kept consistent by `validate-c4`. |
+| **C4 / LikeC4** | notation / View | the *visual notation* of the structure; hand-authored in `c4/src/*.c4`. The blocks it draws are described in **arc42 §5** (responsibilities / interfaces); `validate-c4` reports drift between model and wiki. |
 | **ADR (MADR)** | decision-episteme ledger | append-only record of decisions (the *why*); `adrs/` (arc42 §9). |
 | a **driver** (UC/QA/CON/CONC) | problem-side episteme (C.2.P) | the stable problem inputs a decision must cite (a decision cites its drivers, not vice-versa). |
 
-> **Notational Independence (GR-2, FPF E.5.2).** The wiki entities carry the meaning; C4/LikeC4
-> is one notation of them. You still hand-author the model in `c4/src/*.c4`, but when the
-> notation and the wiki disagree it is **drift to reconcile** — `arch-wiki validate-c4` judges
-> it deterministically (never eyeballed).
+> **The C4 model is the structure's notation — not a second wiki.** You hand-author it in
+> `c4/src/*.c4`; **arc42 §5 (Building Block View)** is where a block's *responsibilities and
+> interfaces* are described (ADD 3.0 step 5). Do not restate the model's ids/kinds/relationships
+> in prose — that is a second source of truth. When notation and wiki disagree it is **drift to
+> reconcile**: `arch-wiki validate-c4` judges it deterministically (never eyeballed), and
+> `c4.consistency.requireDocumentation` is **opt-in** — the plugin does NOT demand a wiki page
+> per model element by default.
 
 ### arc42 → artifact map
 | arc42 | Source |

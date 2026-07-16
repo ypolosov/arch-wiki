@@ -54,9 +54,14 @@ export class ProjectConfig {
 
   /**
    * OPTIONAL+default. The C4↔wiki consistency policy for `validate-c4`. Never
-   * throws — validate-c4 works with sensible defaults even without a [c4] block
-   * (the model arrives via --model-json, not from c4().dir). Default keeps the
-   * check low-noise: only `system`+`container` elements must be documented.
+   * throws — validate-c4 works even without a [c4] block (the model arrives via
+   * --model-json, not from c4().dir).
+   *
+   * `requireDocumentation` is **OPT-IN** (default `[]`): the C4 model is the notation of the
+   * structure and arc42 §5 describes the blocks — demanding a wiki page per model element is a
+   * project's choice, not this plugin's opinion. Set it explicitly (e.g. `["system"]`) to enable
+   * the `c4-element-without-wiki-entity` / `c4-element-in-no-view` checks. The reverse direction
+   * (`wiki-entity-without-c4-element`) is unaffected and still runs.
    */
   c4Consistency(): {
     requireDocumentation: string[];
@@ -65,7 +70,7 @@ export class ProjectConfig {
   } {
     const c = this.cfg.c4?.consistency;
     return {
-      requireDocumentation: c?.requireDocumentation ?? ['system', 'container'],
+      requireDocumentation: c?.requireDocumentation ?? [],
       severity: c?.severity ?? 'medium',
       ignore: c?.ignore ?? [],
     };
