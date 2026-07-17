@@ -1,5 +1,6 @@
 import { ArtifactKind } from '../model/ArtifactType';
 import { GraphSnapshot, pagesOfKind } from '../model/Graph';
+import { isLiveStatus } from '../model/AdrStatus';
 import { kindOfPage } from '../model/WikiPage';
 
 /**
@@ -61,7 +62,7 @@ export function computeAssurance(g: GraphSnapshot, ctx: AssuranceContext = {}): 
     const status = isIter
       ? 'accepted'
       : String((c.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
-    const live = isIter || status === 'accepted';
+    const live = isIter || isLiveStatus(status);
     for (const l of c.links) {
       if (live) {
         const arr = liveCov.get(l.target);

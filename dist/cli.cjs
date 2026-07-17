@@ -9413,9 +9413,25 @@ function levenshtein(a, b) {
   return prev[n];
 }
 
+// src/domain/services/MarkdownTable.ts
+var ATOMIC_SPAN = /\[\[[^\]]*\]\]|``[^`]*``|`[^`\n]*`/g;
+var MASK = "\0";
+function splitTableRow(line) {
+  const spans = [];
+  const masked = line.replace(ATOMIC_SPAN, (m) => {
+    spans.push(m);
+    return `${MASK}${spans.length - 1}${MASK}`;
+  });
+  const restore = (s) => s.replace(new RegExp(`${MASK}(\\d+)${MASK}`, "g"), (_, i) => spans[Number(i)] ?? "");
+  return masked.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => restore(c).trim());
+}
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c.replace(/\s/g, "")));
+}
+
 // src/domain/services/Glossary.ts
 function splitRow(row) {
-  return row.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  return splitTableRow(row);
 }
 function parseTermSheet(markdown) {
   const terms = [];
@@ -9497,9 +9513,35 @@ function glossaryFindings(terms, g) {
   return out;
 }
 
+// src/domain/model/AdrStatus.ts
+var ADR_STATUSES = ["proposed", "rejected", "accepted", "deprecated", "superseded"];
+function normalizeAdrStatus(raw) {
+  return String(raw ?? "").trim().toLowerCase();
+}
+function isAdrStatus(value) {
+  return ADR_STATUSES.includes(value);
+}
+function isLiveStatus(status) {
+  return normalizeAdrStatus(status) === "accepted";
+}
+var NEEDS_SUCCESSOR = ["superseded", "deprecated"];
+function needsSuccessor(status) {
+  return NEEDS_SUCCESSOR.includes(normalizeAdrStatus(status));
+}
+var MIRROR_HIDDEN_STATUSES = ["proposed", "rejected"];
+var RETIRED_STATUS_MAP = {
+  partially: "accepted"
+};
+function statusTag(status) {
+  return `adr/${normalizeAdrStatus(status)}`;
+}
+function isTemplateSlot(basename2) {
+  return /^0{3,4}($|-)/.test(basename2);
+}
+
 // src/domain/services/ConfluenceTree.ts
 var DEFAULT_EXCLUDE = {
-  statuses: ["proposed", "rejected"],
+  statuses: [...MIRROR_HIDDEN_STATUSES],
   // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
   // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
   // `epistemic-debt` = the FPF B.3.4 decay register — an internal health doc, like gap-analysis.
@@ -10052,7 +10094,7 @@ function computeAssurance(g, ctx = {}) {
   for (const c of pagesOfKind(g, ["adr", "iteration"])) {
     const isIter = kindOfPage(c) === "iteration";
     const status = isIter ? "accepted" : String(c.frontmatter.status ?? "").toLowerCase();
-    const live = isIter || status === "accepted";
+    const live = isIter || isLiveStatus(status);
     for (const l of c.links) {
       if (live) {
         const arr = liveCov.get(l.target);
@@ -10727,7 +10769,7 @@ function runLint(g, ctx = {}) {
   for (const c of pagesOfKind(g, ["adr", "iteration"])) {
     const isIter = kindOfPage(c) === "iteration";
     const status = isIter ? "accepted" : String(c.frontmatter.status ?? "").toLowerCase();
-    const live = isIter || status === "accepted";
+    const live = isIter || isLiveStatus(status);
     for (const l of c.links) {
       coveredAny.add(l.target);
       if (live) {
@@ -10760,7 +10802,7 @@ function runLint(g, ctx = {}) {
   }
   for (const adr of pagesOfKind(g, ["adr"])) {
     const status = String(adr.frontmatter.status ?? "").toLowerCase();
-    if (status !== "superseded" && status !== "deprecated") continue;
+    if (!needsSuccessor(status)) continue;
     const hasSuccessor = adr.links.some((l) => {
       const t = present.get(l.target);
       return t != null && kindOfPage(t) === "adr";
@@ -10929,7 +10971,7 @@ function optionsSectionState(content) {
   return hasContent ? "filled" : "empty";
 }
 function adrOptionsEmptyFinding(basename2, relPath, status, content) {
-  if (status.toLowerCase() !== "accepted") return null;
+  if (!isLiveStatus(status)) return null;
   if (optionsSectionState(content) === "empty") {
     return {
       rule: "adr-options-empty",
@@ -10939,6 +10981,51 @@ function adrOptionsEmptyFinding(basename2, relPath, status, content) {
     };
   }
   return null;
+}
+function bodyStatusLabel(content) {
+  for (const line of content.split("\n")) {
+    const m = line.match(/^\s*-?\s*\*\*\s*status\s*:?\s*\*\*:?\s*(.*)$/i);
+    if (m) return normalizeAdrStatus(m[1].replace(/[.;,]$/, ""));
+  }
+  return "";
+}
+function tagStatus(tags) {
+  if (!Array.isArray(tags)) return "";
+  for (const t of tags) {
+    const m = String(t).match(/^adr\/(.+)$/i);
+    if (m) return normalizeAdrStatus(m[1]);
+  }
+  return "";
+}
+function adrStatusFindings(basename2, relPath, frontmatter, content) {
+  if (isTemplateSlot(basename2)) return [];
+  const out = [];
+  const status = normalizeAdrStatus(frontmatter.status);
+  if (!status) return out;
+  if (!isAdrStatus(status)) {
+    const mapped = RETIRED_STATUS_MAP[status];
+    const remedy = mapped ? `retired \u2014 it belongs to ${mapped} plus a tech-debt row; run \`arch-wiki normalize-adr-status\` (add --write to apply)` : `run \`arch-wiki normalize-adr-status\` to report it; pick a canonical status by hand \u2014 Core never guesses a decision's state`;
+    out.push({
+      rule: "adr-status-unknown",
+      severity: "high",
+      file: relPath,
+      message: `ADR ${basename2} has status "${status}" outside the canon (${ADR_STATUSES.join(" | ")}) \u2014 ${remedy}`
+    });
+  }
+  for (const [carrier, value] of [
+    ["adr/<status> tag", tagStatus(frontmatter.tags)],
+    ["`- **Status:**` body label", bodyStatusLabel(content)]
+  ]) {
+    if (value && value !== status) {
+      out.push({
+        rule: "adr-status-inconsistent",
+        severity: "low",
+        file: relPath,
+        message: `ADR ${basename2} states status "${status}" in frontmatter but "${value}" in its ${carrier}`
+      });
+    }
+  }
+  return out;
 }
 
 // src/domain/services/UtilityTree.ts
@@ -10968,16 +11055,34 @@ function tierOf(p) {
 }
 function parseUtilityTable(content) {
   const rows = [];
+  let cols = null;
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t.startsWith("|")) continue;
-    const cells = t.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells.length < 3) continue;
-    const first = cells[0];
-    if (/^driver$/i.test(first)) continue;
-    if (/^:?-+:?$/.test(first.replace(/\s/g, ""))) continue;
-    const m = first.match(/\[\[([^\]|#]+)/);
-    rows.push({ driver: (m ? m[1] : first).trim(), scenario: cells[1], priority: cells[2] });
+    if (!t.startsWith("|")) {
+      cols = null;
+      continue;
+    }
+    const cells = splitTableRow(t);
+    if (cells.length < 2) continue;
+    if (!cols) {
+      const lower = cells.map((c) => c.toLowerCase());
+      if (lower.includes("driver") && lower.includes("priority")) cols = lower;
+      continue;
+    }
+    if (isSeparatorRow(cells)) continue;
+    if (cells.length !== cols.length) continue;
+    const at = (name) => {
+      const i = cols.indexOf(name);
+      return i >= 0 ? cells[i] ?? "" : "";
+    };
+    const driverCell = at("driver");
+    if (!driverCell) continue;
+    const m = driverCell.match(/\[\[([^\]|#]+)/);
+    rows.push({
+      driver: (m ? m[1] : driverCell).trim(),
+      scenario: at("scenario"),
+      priority: at("priority")
+    });
   }
   return rows;
 }
@@ -11009,6 +11114,85 @@ function utilityPriorityFindings(relPath, content) {
         severity: "low",
         file: relPath,
         message: `Utility-tree row ${r.driver} priority "${r.priority}" is not an ATAM (Importance,Difficulty) H/M/L pair (FPF A.19)`
+      });
+    }
+  }
+  return out;
+}
+
+// src/domain/services/ContradictionRefs.ts
+var RISK_ANCHOR_RE = /\[\[risks#\^([A-Z]-\d+)/gi;
+function parseContradictionRefs(content) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of content.matchAll(RISK_ANCHOR_RE)) {
+    const id = m[1].toUpperCase();
+    if (id.startsWith("C-")) out.add(id);
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
+var LIVE_RISK_STATUSES = ["open", "mitigating", "accepted"];
+function isLiveRisk(status) {
+  return LIVE_RISK_STATUSES.includes(status.trim().toLowerCase());
+}
+function parseRiskRows(risksMarkdown) {
+  const rows = [];
+  let cols = null;
+  for (const line of risksMarkdown.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("|")) {
+      cols = null;
+      continue;
+    }
+    const cells = splitTableRow(t);
+    if (cells.length < 3) continue;
+    if (!cols) {
+      const lower = cells.map((c) => c.toLowerCase());
+      if (lower.includes("id") && lower.includes("type") && lower.includes("status")) cols = lower;
+      continue;
+    }
+    if (isSeparatorRow(cells)) continue;
+    if (cells.length !== cols.length) continue;
+    const at = (name) => {
+      const i = cols.indexOf(name);
+      return i >= 0 ? cells[i] ?? "" : "";
+    };
+    const id = at("id").replace(/[`^\[\]]/g, "").trim().toUpperCase();
+    if (!/^[A-Z]-\d+$/.test(id)) continue;
+    const related = [...at("related").matchAll(/\[\[([^\]|#]+)/g)].map((m) => m[1].trim());
+    rows.push({ id, type: at("type").toLowerCase(), status: at("status").toLowerCase(), related });
+  }
+  return rows;
+}
+function contradictionNoteOrphanFindings(artifacts, rows) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = [];
+  for (const a of artifacts) {
+    for (const ref of a.refs) {
+      const row = byId.get(ref);
+      if (!row || isLiveRisk(row.status)) continue;
+      out.push({
+        rule: "adr-contradiction-note-orphan",
+        severity: "low",
+        file: a.file,
+        message: `${a.basename} links contradiction ${ref}, whose register row is ${row.status} \u2014 retire the note if it was an open-question banner; baseline it if the citation is historical`
+      });
+    }
+  }
+  return out;
+}
+function contradictionNoteMissingFindings(artifacts, rows, risksFile) {
+  const byBasename = new Map(artifacts.map((a) => [a.basename, a]));
+  const out = [];
+  for (const row of rows) {
+    if (row.type !== "contradiction" || !isLiveRisk(row.status)) continue;
+    for (const target of row.related) {
+      const a = byBasename.get(target);
+      if (!a || a.refs.includes(row.id)) continue;
+      out.push({
+        rule: "contradiction-note-missing",
+        severity: "low",
+        file: risksFile,
+        message: `${row.id} (${row.status}) contests ${target}, but that page carries no [[risks#^${row.id}]] note \u2014 its reader cannot see the open question`
       });
     }
   }
@@ -11051,6 +11235,31 @@ async function lintWiki(repo, opts = {}) {
     )
   )).filter((f) => f != null);
   if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
+  const adrStatus = (await Promise.all(
+    adrPages.map(
+      async (p) => adrStatusFindings(p.basename, p.relPath, p.frontmatter, await repo.read(p.relPath))
+    )
+  )).flat();
+  if (adrStatus.length) findings = sortFindings([...findings, ...adrStatus]);
+  const risksPage = pages.find((p) => p.basename === "risks");
+  if (risksPage) {
+    const rows = parseRiskRows(await repo.read(risksPage.relPath));
+    if (rows.length) {
+      const contested = new Set(rows.flatMap((r) => r.related));
+      const refs = (await Promise.all(
+        pages.filter((p) => p.basename !== "risks").map(async (p) => ({
+          file: p.relPath,
+          basename: p.basename,
+          refs: parseContradictionRefs(await repo.read(p.relPath))
+        }))
+      )).filter((a) => a.refs.length > 0 || contested.has(a.basename));
+      const cf = [
+        ...contradictionNoteOrphanFindings(refs, rows),
+        ...contradictionNoteMissingFindings(refs, rows, risksPage.relPath)
+      ];
+      if (cf.length) findings = sortFindings([...findings, ...cf]);
+    }
+  }
   const utilityPage = pages.find((p) => p.basename === "utility-tree");
   if (utilityPage) {
     const uf = utilityPriorityFindings(utilityPage.relPath, await repo.read(utilityPage.relPath));
@@ -11429,6 +11638,44 @@ async function updateUtilityTree(input, deps) {
   };
 }
 
+// src/application/usecases/NormalizeAdrStatus.ts
+function rewriteFrontmatter(content, from, to) {
+  const end = content.indexOf("\n---", 3);
+  if (!content.startsWith("---") || end < 0) return content;
+  const head = content.slice(0, end);
+  const rest = content.slice(end);
+  const nextHead = head.replace(/^status:[ \t]*\S.*$/m, `status: ${to}`).split("\n").map((l) => l.includes(statusTag(from)) ? l.replace(statusTag(from), statusTag(to)) : l).join("\n");
+  return `${nextHead}${rest}`;
+}
+async function normalizeAdrStatuses(repo, opts = {}) {
+  const write = opts.write === true;
+  const pages = (await repo.loadPages()).filter((p) => kindOfPage(p) === "adr" && !isTemplateSlot(p.basename));
+  const changes = [];
+  const unmapped = [];
+  for (const p of pages.sort((a, b) => a.relPath.localeCompare(b.relPath))) {
+    const from = normalizeAdrStatus(p.frontmatter.status);
+    if (!from || isAdrStatus(from)) continue;
+    const to = RETIRED_STATUS_MAP[from];
+    if (!to) {
+      unmapped.push({ file: p.relPath, basename: p.basename, status: from });
+      continue;
+    }
+    changes.push({
+      file: p.relPath,
+      basename: p.basename,
+      from,
+      to,
+      note: `"${from}" described how much was BUILT, not what was decided \u2014 record the unfinished part as a tech-debt row in risks.md; the decision itself is ${to}`
+    });
+    if (write) {
+      const content = await repo.read(p.relPath);
+      const next = rewriteFrontmatter(content, from, to);
+      if (next !== content) await repo.write(p.relPath, next);
+    }
+  }
+  return { changes, unmapped, written: write, idempotent: changes.length === 0 && unmapped.length === 0 };
+}
+
 // src/domain/services/C4Scaffold.ts
 var ID_RE2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var FQN_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -11716,7 +11963,6 @@ async function waiveDebt(input, deps) {
 }
 
 // src/domain/services/Adequacy.ts
-var VALID_ADR_STATUS = /* @__PURE__ */ new Set(["proposed", "accepted", "deprecated", "superseded", "rejected"]);
 var SCORED_KINDS = [
   "adr",
   "use-case",
@@ -11760,7 +12006,7 @@ function computeAdequacy(g, ctx = {}) {
   const out = [];
   for (const p of pagesOfKind(g, SCORED_KINDS)) {
     const kind = kindOfPage(p);
-    if (kind === "adr" && /^0{3,4}($|-)/.test(p.basename)) continue;
+    if (kind === "adr" && isTemplateSlot(p.basename)) continue;
     const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
     const linksDrivers = p.links.filter((l) => driverSet.has(l.target)).length;
     const linksAdrs = p.links.filter((l) => adrSet.has(l.target)).length;
@@ -11768,14 +12014,14 @@ function computeAdequacy(g, ctx = {}) {
     const noDebt = !debt.has(p.basename);
     const bases = [];
     if (kind === "adr") {
-      const status = String(p.frontmatter.status ?? "").toLowerCase();
-      const statusOk = VALID_ADR_STATUS.has(status) || hasSection(sections, "Status");
+      const status = normalizeAdrStatus(p.frontmatter.status);
+      const statusOk = status ? isAdrStatus(status) : hasSection(sections, "Status");
       bases.push({ name: "drivers-linked", ok: linksDrivers > 0, critical: true, detail: `${linksDrivers} driver link(s)` });
       bases.push({ name: "options", ok: hasOptionsEvidence(sections, p.headings), critical: true });
       bases.push({ name: "decision", ok: hasAnySection(sections, ["Decision Outcome", "Decision"]), critical: true });
       bases.push({ name: "consequences", ok: hasSection(sections, "Consequences"), critical: false });
       bases.push({ name: "status", ok: statusOk, critical: true, detail: status || "(section)" });
-      if (status === "superseded" || status === "deprecated") {
+      if (needsSuccessor(status)) {
         const hasSuccessor = p.links.some((l) => adrSet.has(l.target) && l.target !== p.basename);
         bases.push({ name: "successor-linked", ok: hasSuccessor, critical: true, detail: `${status} \u2192 successor` });
       }
@@ -11999,7 +12245,7 @@ function isNewerVersion(candidate, current) {
 }
 
 // src/cli/version.ts
-var PLUGIN_VERSION = "0.25.0";
+var PLUGIN_VERSION = "0.26.0";
 
 // src/cli/main.ts
 var WIKI_MARKER = "docs/architecture/";
@@ -12566,11 +12812,11 @@ async function main() {
       fail("lint", err);
     }
   });
-  cli.command("validate-graph", "check links, orphans, coverage (broken links block)").action(async (opts) => {
+  cli.command("validate-graph", "check links, orphans, coverage (any high finding blocks)").action(async (opts) => {
     try {
       const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
       const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
-      const broken = report.findings.filter((f) => f.rule.startsWith("broken"));
+      const broken = report.findings.filter((f) => f.severity === "high");
       emit({
         ok: broken.length === 0,
         command: "validate-graph",
@@ -12716,6 +12962,22 @@ async function main() {
       emit({ ok: true, command: "scaffold-c4-view", data: result });
     } catch (err) {
       fail("scaffold-c4-view", err);
+    }
+  });
+  cli.command("normalize-adr-status", "report (or --write) legacy ADR statuses mapped onto the canon").option("--write", "apply the mapping; default is report-only").action(async (opts) => {
+    try {
+      const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+      const result = await normalizeAdrStatuses(repo, { write: !!opts.write });
+      emit({
+        ok: result.unmapped.length === 0,
+        command: "normalize-adr-status",
+        data: result,
+        warnings: result.unmapped.map(
+          (u) => `${u.basename}: status "${u.status}" has no known mapping \u2014 pick a canonical status by hand (Core never guesses a decision's state)`
+        )
+      });
+    } catch (err) {
+      fail("normalize-adr-status", err);
     }
   });
   cli.command("update-utility-tree", "idempotently upsert a QAW row into utility-tree.md").option("--from <id>", "quality-attribute driver id (keyed; placeholder if absent)").option("--scenario <text>", "quality scenario one-liner").option("--priority <text>", "priority marker (e.g. H/M/L)").action(async (opts) => {

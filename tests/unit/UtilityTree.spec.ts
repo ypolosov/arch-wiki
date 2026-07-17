@@ -76,6 +76,32 @@ describe('UtilityTree — CharacteristicSpace + ScoringMethod (FPF A.19)', () =>
       expect(rows[0]).toEqual({ driver: 'QA-001', scenario: 'latency', priority: 'M,H' });
     });
 
+    it('REGRESSION: ignores a foreign table with a different schema', () => {
+      // The real shape that broke this: Priority is column 1, and the rows are someone else's.
+      // Position-keyed parsing read the SCENARIO prose as a priority → 73 false findings.
+      const foreign = [
+        '# Quality Attribute Utility Tree',
+        '',
+        '| Priority | Quality Attribute | Scenario | Rating |',
+        '|----------|------------------|----------|--------|',
+        '| **Critical** | Performance | API Response Time — Platform APIs respond <200ms for 95% requests | 1 |',
+        '| **Critical** | Modifiability | Code Structure — Microservices support 15+ regulatory regions | 1 |',
+      ].join('\n');
+      expect(parseUtilityTable(foreign)).toEqual([]);
+      expect(utilityPriorityFindings('utility-tree.md', foreign)).toEqual([]);
+    });
+
+    it('maps columns by NAME, not position (managed register, any column order)', () => {
+      const reordered = [
+        '| Priority | Driver | Scenario |',
+        '| --- | --- | --- |',
+        '| H,M | [[QA-009]] | availability |',
+      ].join('\n');
+      expect(parseUtilityTable(reordered)).toEqual([
+        { driver: 'QA-009', scenario: 'availability', priority: 'H,M' },
+      ]);
+    });
+
     it('ranks parseable rows first by the ScoringMethod, unparseable last', () => {
       const ranked = rankUtilityTree(parseUtilityTable(md));
       // scores: H,M=11, H(mid)=11, M,H=9; the 11-tie breaks by driver id asc (QA-002 < QA-003);

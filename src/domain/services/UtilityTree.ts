@@ -1,4 +1,5 @@
 import { LintFinding } from './LintRuleSet';
+import { isSeparatorRow, splitTableRow } from './MarkdownTable';
 
 /**
  * The utility tree as an **Evaluation CharacteristicSpace** with a deterministic **ScoringMethod**
@@ -77,19 +78,49 @@ export interface RankedUtilityRow extends UtilityRow {
   rank: number | null;
 }
 
-/** Parse the `| Driver | Scenario | Priority |` register table into rows (header/separator skipped). */
+/**
+ * Parse the MANAGED register table — the one `update-utility-tree` writes — into rows.
+ *
+ * **Header-anchored, by column NAME** (same discipline as `Glossary.parseTermSheet`). A utility-tree
+ * page may hold several hand-authored tables with entirely different schemas (a real one:
+ * `| Priority | Quality Attribute | Scenario | Rating |`, where Priority is column 1, not 3). Keying
+ * on column POSITION read those foreign tables as if they were ours and reported their scenario prose
+ * as a malformed priority — 73 false findings on a real graph. So: find a header naming BOTH `Driver`
+ * and `Priority`; map columns by name; if no such header exists, this file has no managed register and
+ * we parse NOTHING. Someone else's table is not ours to judge.
+ */
 export function parseUtilityTable(content: string): UtilityRow[] {
   const rows: UtilityRow[] = [];
+  let cols: string[] | null = null;
   for (const line of content.split('\n')) {
     const t = line.trim();
-    if (!t.startsWith('|')) continue;
-    const cells = t.split('|').slice(1, -1).map((c) => c.trim());
-    if (cells.length < 3) continue;
-    const first = cells[0]!;
-    if (/^driver$/i.test(first)) continue; // header row
-    if (/^:?-+:?$/.test(first.replace(/\s/g, ''))) continue; // separator row
-    const m = first.match(/\[\[([^\]|#]+)/);
-    rows.push({ driver: (m ? m[1]! : first).trim(), scenario: cells[1]!, priority: cells[2]! });
+    if (!t.startsWith('|')) {
+      cols = null; // table ended
+      continue;
+    }
+    const cells = splitTableRow(t);
+    if (cells.length < 2) continue;
+    if (!cols) {
+      const lower = cells.map((c) => c.toLowerCase());
+      // Only OUR register: a header naming both Driver and Priority.
+      if (lower.includes('driver') && lower.includes('priority')) cols = lower;
+      continue;
+    }
+    if (isSeparatorRow(cells)) continue; // separator row
+    // Cell count must match the header — a malformed row is never judged (see ContradictionRefs).
+    if (cells.length !== cols.length) continue;
+    const at = (name: string): string => {
+      const i = cols!.indexOf(name);
+      return i >= 0 ? (cells[i] ?? '') : '';
+    };
+    const driverCell = at('driver');
+    if (!driverCell) continue;
+    const m = driverCell.match(/\[\[([^\]|#]+)/);
+    rows.push({
+      driver: (m ? m[1]! : driverCell).trim(),
+      scenario: at('scenario'),
+      priority: at('priority'),
+    });
   }
   return rows;
 }

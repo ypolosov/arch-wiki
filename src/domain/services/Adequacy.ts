@@ -3,6 +3,7 @@ import { GraphSnapshot, inboundCounts, pagesOfKind } from '../model/Graph';
 import { WikiPage, kindOfPage } from '../model/WikiPage';
 import { DriverAssurance, DRIVER_KINDS } from './Assurance';
 import { normalizeSection } from './WikilinkScanner';
+import { ADR_STATUSES, isAdrStatus, isTemplateSlot, needsSuccessor, normalizeAdrStatus } from '../model/AdrStatus';
 
 /**
  * Structural adequacy floor for design artifacts (FPF C.32.ADA decision-adequacy,
@@ -38,7 +39,7 @@ export interface AdequacyContext {
   debtSubjects?: ReadonlySet<string>;
 }
 
-const VALID_ADR_STATUS = new Set(['proposed', 'accepted', 'deprecated', 'superseded', 'rejected']);
+
 const SCORED_KINDS: ArtifactKind[] = [
   'adr',
   'use-case',
@@ -102,7 +103,7 @@ export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): Ar
     // The MADR template lives in the reserved all-zeros ADR slot (`0000-template`; real ADRs start at
     // 0001). It is a skeleton — placeholder drivers, a status listing every lifecycle value — never a
     // decision to score. Excluded from the adequacy floor (a gt review flagged it as a false inadequate).
-    if (kind === 'adr' && /^0{3,4}($|-)/.test(p.basename)) continue;
+    if (kind === 'adr' && isTemplateSlot(p.basename)) continue;
     const sections = new Set([...p.headings, ...p.labels].map(normalizeSection));
     const linksDrivers = p.links.filter((l) => driverSet.has(l.target)).length;
     const linksAdrs = p.links.filter((l) => adrSet.has(l.target)).length;
@@ -112,16 +113,19 @@ export function computeAdequacy(g: GraphSnapshot, ctx: AdequacyContext = {}): Ar
     const bases: AdequacyBase[] = [];
 
     if (kind === 'adr') {
-      const status = String((p.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
-      // Accept both MADR forms: short (`## Decision`, prose `## Status`) and full
-      // (`## Decision Outcome`, frontmatter `status:`).
-      const statusOk = VALID_ADR_STATUS.has(status) || hasSection(sections, 'Status');
+      const status = normalizeAdrStatus((p.frontmatter as { status?: unknown }).status);
+      // Both MADR forms are accepted: the full form carries `status:` in frontmatter, the short form
+      // states it in the body (`- **Status:** …`). But judge them in the right order — a PRESENT
+      // frontmatter status is judged strictly against the canon; only an ABSENT one falls back to the
+      // short form's label. (The old `has(status) || hasSection('Status')` let ANY garbage pass as long
+      // as a `**Status:**` label existed anywhere — which is how a non-canonical status went unnoticed.)
+      const statusOk = status ? isAdrStatus(status) : hasSection(sections, 'Status');
       bases.push({ name: 'drivers-linked', ok: linksDrivers > 0, critical: true, detail: `${linksDrivers} driver link(s)` });
       bases.push({ name: 'options', ok: hasOptionsEvidence(sections, p.headings), critical: true });
       bases.push({ name: 'decision', ok: hasAnySection(sections, ['Decision Outcome', 'Decision']), critical: true });
       bases.push({ name: 'consequences', ok: hasSection(sections, 'Consequences'), critical: false });
       bases.push({ name: 'status', ok: statusOk, critical: true, detail: status || '(section)' });
-      if (status === 'superseded' || status === 'deprecated') {
+      if (needsSuccessor(status)) {
         const hasSuccessor = p.links.some((l) => adrSet.has(l.target) && l.target !== p.basename);
         bases.push({ name: 'successor-linked', ok: hasSuccessor, critical: true, detail: `${status} → successor` });
       }

@@ -36,6 +36,7 @@ import { normalizeC4ModelJson, parseC4Sources } from '../adapters/c4/LikeC4Model
 import { recordRisk } from '../application/usecases/RecordRisk';
 import { updateKanban, KanbanColumn } from '../application/usecases/UpdateKanban';
 import { updateUtilityTree } from '../application/usecases/UpdateUtilityTree';
+import { normalizeAdrStatuses } from '../application/usecases/NormalizeAdrStatus';
 import { scaffoldC4Element, scaffoldC4View } from '../application/usecases/ScaffoldC4';
 import { updateGapAnalysis } from '../application/usecases/UpdateGapAnalysis';
 import { reportDriverAssurance } from '../application/usecases/DriverAssurance';
@@ -818,12 +819,17 @@ async function main(): Promise<void> {
     });
 
   cli
-    .command('validate-graph', 'check links, orphans, coverage (broken links block)')
+    .command('validate-graph', 'check links, orphans, coverage (any high finding blocks)')
     .action(async (opts: GlobalOpts) => {
       try {
         const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
         const report = await lintWiki(repo, { config: await loadProjectConfig(opts) });
-        const broken = report.findings.filter((f) => f.rule.startsWith('broken'));
+        // The gate is SEVERITY-based: every `high` finding blocks. It used to filter on the rule-name
+        // prefix `broken*`, which made `severity` a dead declaration — a rule could be shipped `high`
+        // and still pass validation. Blocking on the declared severity is the honest contract, and it
+        // is what lets a new high rule (e.g. adr-status-unknown) actually gate. Pre-existing findings
+        // in a legacy wiki are silenced the established way: the adoption baseline.
+        const broken = report.findings.filter((f) => f.severity === 'high');
         emit({
           ok: broken.length === 0,
           command: 'validate-graph',
@@ -1014,6 +1020,26 @@ async function main(): Promise<void> {
         emit({ ok: true, command: 'scaffold-c4-view', data: result });
       } catch (err) {
         fail('scaffold-c4-view', err);
+      }
+    });
+
+  cli
+    .command('normalize-adr-status', 'report (or --write) legacy ADR statuses mapped onto the canon')
+    .option('--write', 'apply the mapping; default is report-only')
+    .action(async (opts: GlobalOpts & Record<string, unknown>) => {
+      try {
+        const repo = new FoamWikiRepository(wikiRoot(opts), new NodeFileSystem());
+        const result = await normalizeAdrStatuses(repo, { write: !!opts.write });
+        emit({
+          ok: result.unmapped.length === 0,
+          command: 'normalize-adr-status',
+          data: result,
+          warnings: result.unmapped.map(
+            (u) => `${u.basename}: status "${u.status}" has no known mapping — pick a canonical status by hand (Core never guesses a decision's state)`,
+          ),
+        });
+      } catch (err) {
+        fail('normalize-adr-status', err);
       }
     });
 

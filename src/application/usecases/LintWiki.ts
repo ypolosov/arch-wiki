@@ -13,8 +13,15 @@ import {
 } from '../../domain/services/LintRuleSet';
 import { glossaryFindings, parseTermSheet } from '../../domain/services/Glossary';
 import { qaMeasureFinding } from '../../domain/services/QualityAttribute';
-import { adrOptionsEmptyFinding } from '../../domain/services/DecisionRecord';
+import { adrOptionsEmptyFinding, adrStatusFindings } from '../../domain/services/DecisionRecord';
 import { utilityPriorityFindings } from '../../domain/services/UtilityTree';
+import {
+  ArtifactRefs,
+  contradictionNoteMissingFindings,
+  contradictionNoteOrphanFindings,
+  parseContradictionRefs,
+  parseRiskRows,
+} from '../../domain/services/ContradictionRefs';
 import { kindOfPage } from '../../domain/model/WikiPage';
 import { ProjectConfig } from '../../domain/services/ProjectConfig';
 import { WikiRepositoryPort } from '../ports/WikiRepositoryPort';
@@ -85,6 +92,43 @@ export async function lintWiki(
     )
   ).filter((f): f is NonNullable<typeof f> => f != null);
   if (adrFindings.length) findings = sortFindings([...findings, ...adrFindings]);
+
+  // ADR status canon + carrier agreement (single source of truth: domain/model/AdrStatus).
+  const adrStatus = (
+    await Promise.all(
+      adrPages.map(async (p) =>
+        adrStatusFindings(p.basename, p.relPath, p.frontmatter as { status?: unknown; tags?: unknown }, await repo.read(p.relPath)),
+      ),
+    )
+  ).flat();
+  if (adrStatus.length) findings = sortFindings([...findings, ...adrStatus]);
+
+  // Contradiction note ⟷ risks.md row coherence. A note is a temporary marker of an OPEN question;
+  // its lifecycle is bound to its register row. Link-based (never prose-based) — see ContradictionRefs.
+  const risksPage = pages.find((p) => p.basename === 'risks');
+  if (risksPage) {
+    const rows = parseRiskRows(await repo.read(risksPage.relPath));
+    if (rows.length) {
+      const contested = new Set(rows.flatMap((r) => r.related));
+      // Only pages a row actually names, plus any page that already links a contradiction.
+      const refs: ArtifactRefs[] = (
+        await Promise.all(
+          pages
+            .filter((p) => p.basename !== 'risks')
+            .map(async (p) => ({
+              file: p.relPath,
+              basename: p.basename,
+              refs: parseContradictionRefs(await repo.read(p.relPath)),
+            })),
+        )
+      ).filter((a) => a.refs.length > 0 || contested.has(a.basename));
+      const cf = [
+        ...contradictionNoteOrphanFindings(refs, rows),
+        ...contradictionNoteMissingFindings(refs, rows, risksPage.relPath),
+      ];
+      if (cf.length) findings = sortFindings([...findings, ...cf]);
+    }
+  }
 
   // Utility-tree ScoringMethod well-formedness (FPF A.19): each priority cell must be an ATAM
   // (Importance,Difficulty) H/M/L pair. Single derived register, keyed like the glossary.

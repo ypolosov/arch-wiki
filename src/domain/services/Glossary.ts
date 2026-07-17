@@ -1,6 +1,7 @@
 import { GraphSnapshot, pagesOfKind } from '../model/Graph';
 import { LintFinding } from './LintRuleSet';
 import { levenshtein } from './Levenshtein';
+import { splitTableRow } from './MarkdownTable';
 
 /**
  * Glossary as a Unified Term Sheet (FPF F.17 / F.7). `glossary.md` is a Markdown
@@ -19,8 +20,9 @@ export interface GlossaryTerm {
   links: string[];
 }
 
+/** Wikilink-aware (a `[[a|b]]` alias pipe is not a cell separator) — see MarkdownTable. */
 function splitRow(row: string): string[] {
-  return row.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  return splitTableRow(row);
 }
 
 /** Parse the term sheet out of `glossary.md` markdown. Deterministic; frontmatter/prose ignored. */

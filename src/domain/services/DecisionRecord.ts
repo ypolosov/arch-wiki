@@ -1,4 +1,12 @@
 import { LintFinding } from './LintRuleSet';
+import {
+  ADR_STATUSES,
+  isAdrStatus,
+  isLiveStatus,
+  isTemplateSlot,
+  normalizeAdrStatus,
+  RETIRED_STATUS_MAP,
+} from '../model/AdrStatus';
 
 /**
  * State of an ADR's `## Considered Options` section (FPF C.32.ADA — a decision needs a
@@ -37,7 +45,7 @@ export function adrOptionsEmptyFinding(
   status: string,
   content: string,
 ): LintFinding | null {
-  if (status.toLowerCase() !== 'accepted') return null;
+  if (!isLiveStatus(status)) return null;
   if (optionsSectionState(content) === 'empty') {
     return {
       rule: 'adr-options-empty',
@@ -47,4 +55,75 @@ export function adrOptionsEmptyFinding(
     };
   }
   return null;
+}
+
+/** The status stated in the body by the MADR short form (`- **Status:** accepted`), or ''. */
+export function bodyStatusLabel(content: string): string {
+  for (const line of content.split('\n')) {
+    const m = line.match(/^\s*-?\s*\*\*\s*status\s*:?\s*\*\*:?\s*(.*)$/i);
+    if (m) return normalizeAdrStatus(m[1]!.replace(/[.;,]$/, ''));
+  }
+  return '';
+}
+
+/** The status carried by the `adr/<status>` frontmatter tag, or '' when absent. */
+export function tagStatus(tags: unknown): string {
+  if (!Array.isArray(tags)) return '';
+  for (const t of tags) {
+    const m = String(t).match(/^adr\/(.+)$/i);
+    if (m) return normalizeAdrStatus(m[1]!);
+  }
+  return '';
+}
+
+/**
+ * Status rules over one ADR. The status is stated in up to THREE carriers — frontmatter `status:`
+ * (canonical), the `adr/<status>` tag, and the MADR short form's `- **Status:**` body label — and
+ * nothing kept them in sync but human discipline.
+ *
+ * - `adr-status-unknown` (**high**): the frontmatter status is outside the canon. High because an
+ *   unrecognised status silently disables every status-driven rule (live-coverage, mirror visibility,
+ *   successor checks) — the drift that let a non-canonical value spread unnoticed.
+ * - `adr-status-inconsistent` (low): a secondary carrier disagrees with the canonical frontmatter.
+ *
+ * The reserved template slot (`0000-template`) carries no decision and is never judged.
+ */
+export function adrStatusFindings(
+  basename: string,
+  relPath: string,
+  frontmatter: { status?: unknown; tags?: unknown },
+  content: string,
+): LintFinding[] {
+  if (isTemplateSlot(basename)) return [];
+  const out: LintFinding[] = [];
+  const status = normalizeAdrStatus(frontmatter.status);
+  if (!status) return out; // absent status → the adequacy floor's job, not a drift signal
+
+  if (!isAdrStatus(status)) {
+    const mapped = RETIRED_STATUS_MAP[status];
+    const remedy = mapped
+      ? `retired — it belongs to ${mapped} plus a tech-debt row; run \`arch-wiki normalize-adr-status\` (add --write to apply)`
+      : `run \`arch-wiki normalize-adr-status\` to report it; pick a canonical status by hand — Core never guesses a decision's state`;
+    out.push({
+      rule: 'adr-status-unknown',
+      severity: 'high',
+      file: relPath,
+      message: `ADR ${basename} has status "${status}" outside the canon (${ADR_STATUSES.join(' | ')}) — ${remedy}`,
+    });
+  }
+
+  for (const [carrier, value] of [
+    ['adr/<status> tag', tagStatus(frontmatter.tags)],
+    ['`- **Status:**` body label', bodyStatusLabel(content)],
+  ] as const) {
+    if (value && value !== status) {
+      out.push({
+        rule: 'adr-status-inconsistent',
+        severity: 'low',
+        file: relPath,
+        message: `ADR ${basename} states status "${status}" in frontmatter but "${value}" in its ${carrier}`,
+      });
+    }
+  }
+  return out;
 }

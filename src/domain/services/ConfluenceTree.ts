@@ -2,6 +2,7 @@ import { ArtifactKind } from '../model/ArtifactType';
 import { GraphSnapshot } from '../model/Graph';
 import { WikiPage, kindOfPage } from '../model/WikiPage';
 import { parseTermSheet } from './Glossary';
+import { MIRROR_HIDDEN_STATUSES } from '../model/AdrStatus';
 
 /**
  * Pure helpers for the Confluence KB mirror (CAP-2). Decide page visibility,
@@ -18,7 +19,7 @@ export interface MirrorExclude {
 }
 
 export const DEFAULT_EXCLUDE: MirrorExclude = {
-  statuses: ['proposed', 'rejected'],
+  statuses: [...MIRROR_HIDDEN_STATUSES],
   // `CLAUDE` = the Layer-3 schema/contributor doc (docs/architecture/CLAUDE.md): all git internals
   // (raw/, .foam/, c4/src/, register names), not stakeholder content → excluded from the mirror (v0.8.2 D).
   // `epistemic-debt` = the FPF B.3.4 decay register — an internal health doc, like gap-analysis.

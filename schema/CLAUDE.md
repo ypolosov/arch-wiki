@@ -161,7 +161,12 @@ each updated only via the CLI — never edited by hand:
 3. If the answer is durable and reusable, offer to persist it as a
    `concepts/<topic>.md` page wired into the graph.
 
-### `/arch-wiki:lint`
+### `/arch-wiki:lint` · `validate-graph`
+`validate-graph` runs the same checks and **blocks (exit 2) on any `high` finding** (v0.26). It used to
+gate on the rule-name prefix `broken*`, which made `severity` a dead declaration — a rule could be
+shipped `high` and still pass validation. Adopt a legacy wiki the established way: the lint baseline
+suppresses pre-existing findings, so only new drift blocks.
+
 Audit and report (then propose fixes / append to `risks.md`):
 - Orphan pages and broken wikilinks / unresolved placeholders.
 - QA scenario with no linked ADR **or** no linked C4 element.
@@ -179,6 +184,27 @@ Audit and report (then propose fixes / append to `risks.md`):
   empty `## Considered Options` section — a decision recorded with no alternatives (robust to any
   option format). An ABSENT section is left to `/arch-wiki:review` adequacy; whether a *filled* set is
   substantive/distinct is an LLM judgement, not a deterministic count.
+- **ADR status canon** (`adr-status-unknown`, **high** — blocks `validate-graph`): the status must be
+  one of `proposed | rejected | accepted | deprecated | superseded`. Core owns the list
+  (`domain/model/AdrStatus.ts`) and every consumer reads it from there — the skill, the template and
+  the code had already drifted apart, which is how a non-canonical status spread unseen. An
+  unrecognised status silently disables every status-driven rule (live-coverage, mirror visibility,
+  successor checks), hence high. `partially` is **retired** — it mixed the DECISION's state with its
+  IMPLEMENTATION's, an axis already modelled as AssuranceLevel (L1 decided vs L2 realized); map it to
+  `accepted` + a tech-debt row via `arch-wiki normalize-adr-status` (report-only; `--write` applies).
+  An absent status and the reserved `0000-template` slot are never judged.
+- ADR status carriers (`adr-status-inconsistent`, low): the status is stated in up to three places —
+  frontmatter `status:` (**canonical**), the `adr/<status>` tag, and the short form's `- **Status:**`
+  body label. This flags a secondary carrier that disagrees with the frontmatter.
+- **Contradiction note ⟷ register row** (FPF: none — the ingestor's own rule): a contradiction note is
+  a temporary marker of an OPEN question, not a permanent comment, so its lifecycle is bound to its
+  `risks.md` row. `contradiction-note-missing` (low) — a live `Contradiction` row names an artifact
+  that carries no `[[risks#^C-NNN]]` link back, so its reader cannot see the decision is contested.
+  `adr-contradiction-note-orphan` (low) — an artifact links a contradiction whose row is **closed**;
+  Core reports the fact, not a verdict (a closed contradiction may be cited legitimately as history —
+  telling that from a stale banner is `/arch-wiki:review`'s judgement). Both read the **wikilink**, never
+  the note's prose: the note is written half a dozen ways, and a bare inline-code `` `C-015` `` is not
+  counted as a reference.
 - Utility-tree ScoringMethod (`utility-priority-illformed`, low, FPF A.19): a `utility-tree.md`
   priority cell that is present but not an ATAM **(Importance,Difficulty)** H/M/L pair — accepts the
   short marker `H` and the pair `H,M`/`(H,M)`/`H/M`; an unset placeholder (`—`, TBD) is never flagged.

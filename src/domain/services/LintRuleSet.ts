@@ -4,6 +4,7 @@ import { GraphSnapshot, inboundCounts, pagesOfKind } from '../model/Graph';
 import { WikiPage, kindOfPage, kindOfRelPath } from '../model/WikiPage';
 import { levenshtein } from './Levenshtein';
 import { normalizeSection } from './WikilinkScanner';
+import { isLiveStatus, needsSuccessor } from '../model/AdrStatus';
 import { posixResolve } from './PathUtil';
 
 export interface LintContext {
@@ -145,7 +146,7 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
     const status = isIter
       ? 'accepted'
       : String((c.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
-    const live = isIter || status === 'accepted';
+    const live = isIter || isLiveStatus(status);
     for (const l of c.links) {
       coveredAny.add(l.target);
       if (live) {
@@ -182,7 +183,7 @@ export function runLint(g: GraphSnapshot, ctx: LintContext = {}): LintFinding[] 
   // 5. Superseded/deprecated ADR with no link to a successor ADR.
   for (const adr of pagesOfKind(g, ['adr'])) {
     const status = String((adr.frontmatter as { status?: unknown }).status ?? '').toLowerCase();
-    if (status !== 'superseded' && status !== 'deprecated') continue;
+    if (!needsSuccessor(status)) continue;
     const hasSuccessor = adr.links.some((l) => {
       const t = present.get(l.target);
       return t != null && kindOfPage(t) === 'adr';
